@@ -61,4 +61,7 @@ Release 签名通过仓库根目录下不纳入版本控制的 `keystore.propert
 
 - [Android 技术方案](docs/技术方案.md)
 - [大麦 Android 业务逻辑](docs/大麦业务逻辑.md)
+- [普通用户手机使用说明](docs/手机端用户使用说明.md)
+- [手机端使用与测试指南](docs/手机端使用与测试指南.md)
+- [普通用户手机使用说明（Word）](docs/手机端使用与测试指南.docx)
 - [0.1.0 交付验收记录](docs/验收记录.md)

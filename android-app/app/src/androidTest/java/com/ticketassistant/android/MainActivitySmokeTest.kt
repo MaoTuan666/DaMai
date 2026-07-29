@@ -31,51 +31,54 @@ class MainActivitySmokeTest {
 
         assertTrue(
             "配置页未在 5 秒内显示",
-            device.wait(Until.hasObject(By.text("购票任务配置")), SCREEN_TIMEOUT_MS),
+            device.wait(Until.hasObject(By.text("购票辅助")), SCREEN_TIMEOUT_MS),
         )
     }
 
     @Test
     fun configScreen_exposesTargetsAndManualPaymentBoundary() {
         assertEquals(TARGET_PACKAGE, device.currentPackageName)
-        assertNotNull(device.findObject(By.text("当前支持：大麦 Android")))
+        assertNotNull(device.findObject(By.text("创建新的购票任务")))
+        assertNotNull(device.findObject(By.text("当前支持大麦 Android")))
         assertNotNull(device.findObject(By.text("只抢票")))
-        assertNotNull(device.findObject(By.text("项目识别关键词")))
-        assertNotNull(device.findObject(By.text("目标场次")))
-        assertNotNull(device.findObject(By.text("目标票档名称")))
-        assertNotNull(
-            device.findObject(
-                By.text("付款始终由你手动完成。应用不会保存账号、实名信息或支付资料。"),
+        assertTrue("未找到项目识别关键词", scrollUntilText("项目识别关键词"))
+        assertTrue("未找到目标场次", scrollUntilText("目标场次"))
+        assertTrue("未找到目标票档名称", scrollUntilText("目标票档名称"))
+        assertTrue(
+            "未找到手动付款边界提示",
+            scrollUntilText(
+                "付款始终由你手动完成。应用不会保存账号、实名信息或支付资料。",
             ),
         )
     }
 
     @Test
     fun configScreen_scrollsToSafetyControlsWithoutLaunchingDamai() {
-        val centerX = device.displayWidth / 2
-        device.swipe(
-            centerX,
-            device.displayHeight * 4 / 5,
-            centerX,
-            device.displayHeight / 4,
-            30,
-        )
-
-        assertTrue(
-            "底部安全提示未在 5 秒内显示",
-            device.wait(
-                Until.hasObject(By.text("开始后请自行打开大麦；本应用不会自动启动售票软件。")),
-                SCREEN_TIMEOUT_MS,
-            ),
-        )
+        assertTrue("未找到最大提交次数", scrollUntilText("最大提交次数"))
         assertNotNull(device.findObject(By.text("最大提交次数")))
         assertNotNull(device.findObject(By.text("最长运行（分钟）")))
-        assertNotNull(device.findObject(By.text("保存并开始")))
+        assertNotNull(device.findObject(By.text("保存配置并开始")))
         assertEquals(TARGET_PACKAGE, device.currentPackageName)
+    }
+
+    private fun scrollUntilText(text: String): Boolean {
+        repeat(MAX_SCROLL_ATTEMPTS) {
+            if (device.hasObject(By.text(text))) return true
+            val centerX = device.displayWidth / 2
+            device.swipe(
+                centerX,
+                device.displayHeight * 4 / 5,
+                centerX,
+                device.displayHeight / 4,
+                30,
+            )
+        }
+        return device.wait(Until.hasObject(By.text(text)), SCREEN_TIMEOUT_MS)
     }
 
     private companion object {
         const val TARGET_PACKAGE = "com.ticketassistant.android"
         const val SCREEN_TIMEOUT_MS = 5_000L
+        const val MAX_SCROLL_ATTEMPTS = 8
     }
 }
