@@ -20,8 +20,6 @@ enum class SafetyPauseReason {
 
 enum class RuntimeStopReason {
     USER_REQUESTED,
-    MAX_RUNTIME_REACHED,
-    MAX_SUBMIT_ATTEMPTS_REACHED,
     ACTION_FAILURE_LIMIT_REACHED,
     ORDER_LOCKED,
     PLATFORM_REQUESTED,
@@ -43,7 +41,7 @@ data class EngineRuntimeState(
 
     companion object {
         fun initial(runMode: RunMode): EngineRuntimeState = EngineRuntimeState(
-            taskState = TaskState.WAIT_TARGET_APP,
+            taskState = TaskState.ARMED,
             phase = if (runMode == RunMode.RETURN_ONLY) {
                 AutomationPhase.RETURN_MONITOR
             } else {
@@ -55,6 +53,7 @@ data class EngineRuntimeState(
 
 sealed interface RuntimeEvent {
     data class SnapshotObserved(val sequence: Long) : RuntimeEvent
+    data object UserStart : RuntimeEvent
     data class TargetPageRecognized(val sequence: Long) : RuntimeEvent
     data object UserPause : RuntimeEvent
     data object UserResume : RuntimeEvent
@@ -85,11 +84,23 @@ object RuntimeStateMachine {
                 }
                 observeSnapshot(current, event.sequence)
             }
+            RuntimeEvent.UserStart -> {
+                if (current.taskState != TaskState.ARMED) {
+                    return StateTransition.Rejected(current.taskState, event)
+                }
+                current.copy(
+                    taskState = TaskState.WAIT_TARGET_APP,
+                    requiredFreshSnapshotAfter = current.lastSnapshotSequence,
+                )
+            }
             is RuntimeEvent.TargetPageRecognized -> {
                 if (
                     current.taskState != TaskState.WAIT_TARGET_APP ||
                     event.sequence <= 0 ||
-                    event.sequence < current.lastSnapshotSequence
+                    event.sequence < current.lastSnapshotSequence ||
+                    current.requiredFreshSnapshotAfter?.let {
+                        event.sequence <= it
+                    } == true
                 ) {
                     return StateTransition.Rejected(current.taskState, event)
                 }

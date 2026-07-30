@@ -4,7 +4,7 @@
     <string name="accessibility_service_description">仅识别已支持售票应用的页面节点，并按用户配置执行受控操作；不会处理付款。</string>
     <string name="run_notification_channel_name">购票任务运行状态</string>
     <string name="run_notification_title">购票辅助正在运行</string>
-    <string name="run_notification_waiting">等待你手动打开目标售票应用</string>
+    <string name="run_notification_waiting">配置已保存，请打开大麦并点击悬浮“开始”</string>
     <string name="run_notification_takeover">已进入支付前页面，请立即手动接管</string>
     <string name="run_notification_stop">停止</string>
 </resources>

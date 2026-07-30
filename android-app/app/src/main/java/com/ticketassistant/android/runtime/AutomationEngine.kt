@@ -29,7 +29,6 @@ sealed interface EngineActionDecision {
 class AutomationEngine(
     val runId: String,
     private val task: TicketTask,
-    startedAtMillis: Long,
     private val nowMillis: () -> Long,
     private val recorder: RuntimeStateRecorder,
     private val onStateChanged: (EngineRuntimeState) -> Unit = {},
@@ -38,11 +37,7 @@ class AutomationEngine(
     private val mutex = Mutex()
     private val scheduler = ControlledActionScheduler(runId, actionPolicy)
     private val safetyGuard = RuntimeSafetyGuard(
-        startedAtMillis = startedAtMillis,
-        limits = RuntimeLimits(
-            maxSubmitAttempts = task.maxSubmitAttempts,
-            maxRuntimeMillis = task.maxRuntimeSeconds * 1_000L,
-        ),
+        limits = RuntimeLimits(),
     )
     private val mutableState = MutableStateFlow(EngineRuntimeState.initial(task.runMode))
     val state: StateFlow<EngineRuntimeState> = mutableState.asStateFlow()
@@ -50,10 +45,22 @@ class AutomationEngine(
     suspend fun initialize() = mutex.withLock {
         recorder.record(
             state = mutableState.value,
-            eventCode = "ENGINE_READY",
-            sanitizedDetail = "运行引擎已就绪，等待识别目标起始页面",
+            eventCode = "ENGINE_ARMED",
+            sanitizedDetail = "配置已就绪，等待用户在悬浮窗点击开始",
         )
         onStateChanged(mutableState.value)
+    }
+
+    suspend fun start(): StateTransition = mutex.withLock {
+        val transition = applyAndRecordLocked(
+            event = RuntimeEvent.UserStart,
+            eventCode = "TASK_USER_STARTED",
+            detail = "用户点击开始，准备识别当前大麦页面",
+        )
+        if (transition is StateTransition.Applied) {
+            safetyGuard.reset()
+        }
+        transition
     }
 
     suspend fun observeSnapshot(
@@ -144,28 +151,6 @@ class AutomationEngine(
         transition
     }
 
-    suspend fun checkRuntimeLimit(): RuntimeStopReason? = mutex.withLock {
-        val current = mutableState.value
-        if (current.taskState == TaskState.STOPPED) return@withLock current.stopReason
-        return@withLock when (
-            val limit = safetyGuard.beforeAction(
-                nowMillis = nowMillis(),
-                countsAsSubmitAttempt = false,
-            )
-        ) {
-            SafetyLimitDecision.Allowed -> null
-            is SafetyLimitDecision.Stop -> {
-                scheduler.stop()
-                applyAndRecordLocked(
-                    event = RuntimeEvent.Stop(limit.reason),
-                    eventCode = "TASK_STOPPED",
-                    detail = limit.reason.name,
-                )
-                limit.reason
-            }
-        }
-    }
-
     suspend fun requestAction(
         candidate: ActionCandidate,
         snapshotSequence: Long,
@@ -173,24 +158,6 @@ class AutomationEngine(
         val current = mutableState.value
         if (!current.canScheduleAction(snapshotSequence)) {
             return@withLock EngineActionDecision.StateDoesNotAllowAction
-        }
-
-        when (
-            val limit = safetyGuard.beforeAction(
-                nowMillis = nowMillis(),
-                countsAsSubmitAttempt = candidate.countsAsSubmitAttempt,
-            )
-        ) {
-            SafetyLimitDecision.Allowed -> Unit
-            is SafetyLimitDecision.Stop -> {
-                scheduler.stop()
-                applyAndRecordLocked(
-                    event = RuntimeEvent.Stop(limit.reason),
-                    eventCode = "TASK_STOPPED",
-                    detail = limit.reason.name,
-                )
-                return@withLock EngineActionDecision.Stopped(limit.reason)
-            }
         }
 
         when (val decision = scheduler.request(candidate, nowMillis())) {
@@ -253,7 +220,6 @@ class AutomationEngine(
 
         when (
             val limit = safetyGuard.recordCompletion(
-                countsAsSubmitAttempt = action.candidate.countsAsSubmitAttempt,
                 result = result,
             )
         ) {

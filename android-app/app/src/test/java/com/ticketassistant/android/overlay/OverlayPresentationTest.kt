@@ -30,6 +30,15 @@ class OverlayPresentationTest {
     }
 
     @Test
+    fun `armed state exposes explicit start control`() {
+        val presentation = OverlayPresentation.controls(state(TaskState.ARMED))
+
+        assertEquals("开始", presentation.primaryButtonText)
+        assertEquals(OverlayPrimaryAction.START, presentation.primaryAction)
+        assertTrue(presentation.primaryButtonEnabled)
+    }
+
+    @Test
     fun `safety paused state cannot be resumed from overlay`() {
         val presentation = OverlayPresentation.controls(
             state(TaskState.SAFETY_PAUSED).copy(
@@ -46,7 +55,7 @@ class OverlayPresentationTest {
     fun `waiting state keeps primary control disabled`() {
         val presentation = OverlayPresentation.controls(state(TaskState.WAIT_TARGET_APP))
 
-        assertEquals("等待", presentation.primaryButtonText)
+        assertEquals("识别中", presentation.primaryButtonText)
         assertNull(presentation.primaryAction)
         assertFalse(presentation.primaryButtonEnabled)
     }

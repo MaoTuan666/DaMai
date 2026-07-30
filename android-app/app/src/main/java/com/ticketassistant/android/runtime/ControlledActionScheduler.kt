@@ -15,7 +15,6 @@ data class ActionPolicy(
 data class ActionCandidate(
     val actionKey: String,
     val pageFingerprint: String,
-    val countsAsSubmitAttempt: Boolean = false,
 ) {
     init {
         require(actionKey.isNotBlank())

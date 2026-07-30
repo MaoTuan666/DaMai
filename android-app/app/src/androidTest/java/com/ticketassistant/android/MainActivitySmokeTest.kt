@@ -41,9 +41,8 @@ class MainActivitySmokeTest {
         assertNotNull(device.findObject(By.text("创建新的购票任务")))
         assertNotNull(device.findObject(By.text("当前支持大麦 Android")))
         assertNotNull(device.findObject(By.text("只抢票")))
-        assertTrue("未找到项目识别关键词", scrollUntilText("项目识别关键词"))
-        assertTrue("未找到目标场次", scrollUntilText("目标场次"))
-        assertTrue("未找到目标票档名称", scrollUntilText("目标票档名称"))
+        assertTrue("未找到演出日期", scrollUntilText("演出日期"))
+        assertTrue("未找到票档价格", scrollUntilText("票档价格（元）"))
         assertTrue(
             "未找到手动付款边界提示",
             scrollUntilText(
@@ -53,11 +52,9 @@ class MainActivitySmokeTest {
     }
 
     @Test
-    fun configScreen_scrollsToSafetyControlsWithoutLaunchingDamai() {
-        assertTrue("未找到最大提交次数", scrollUntilText("最大提交次数"))
-        assertNotNull(device.findObject(By.text("最大提交次数")))
-        assertNotNull(device.findObject(By.text("最长运行（分钟）")))
-        assertNotNull(device.findObject(By.text("保存配置并开始")))
+    fun configScreen_scrollsToStartControlWithoutLaunchingDamai() {
+        assertTrue("未找到启动按钮", scrollUntilText("保存配置并显示悬浮窗"))
+        assertNotNull(device.findObject(By.text("保存配置并显示悬浮窗")))
         assertEquals(TARGET_PACKAGE, device.currentPackageName)
     }
 

@@ -58,12 +58,8 @@ enum class PageUnknownReason {
 
 enum class TargetField {
     PLATFORM,
-    EVENT,
-    SESSION,
-    TIER,
+    DATE,
     PRICE,
-    QUANTITY,
-    ATTENDEE_COUNT,
 }
 
 sealed interface PageResult {
@@ -147,7 +143,6 @@ sealed interface ActionDecision {
     data class Click(
         val target: ClickTarget,
         val eventCode: String,
-        val countsAsSubmitAttempt: Boolean = false,
     ) : ActionDecision {
         init {
             requireStandardCode(eventCode, "Action event code")

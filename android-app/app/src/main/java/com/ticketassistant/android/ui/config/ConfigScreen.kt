@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -21,14 +20,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -38,9 +37,14 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -59,6 +63,8 @@ import com.ticketassistant.android.domain.TicketTaskValidator
 import com.ticketassistant.android.domain.ValidationResult
 import com.ticketassistant.android.runtime.NotificationPermissionState
 import com.ticketassistant.android.ui.theme.TicketAssistantTheme
+import java.time.Instant
+import java.time.ZoneOffset
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -125,78 +131,36 @@ fun ConfigScreen(
             SectionCard(
                 step = "02",
                 title = "填写目标信息",
-                description = "请与大麦项目页中的场次和票档名称保持一致。",
+                description = "先在大麦选好项目页，这里只填写用于校验和选票档的信息。",
             ) {
-                ConfigTextField(
-                    label = "项目识别关键词",
-                    placeholder = "例如：歌手名 + 城市",
-                    value = state.draft.eventKeyword,
-                    error = state.error(ConfigField.EVENT_KEYWORD),
-                    onValueChange = { value ->
-                        onDraftChange { it.copy(eventKeyword = value) }
+                DatePickerField(
+                    value = state.draft.targetDate,
+                    error = state.error(ConfigField.TARGET_DATE),
+                    onDateSelected = { value ->
+                        onDraftChange { it.copy(targetDate = value) }
                     },
                 )
                 ConfigTextField(
-                    label = "目标场次",
-                    placeholder = "例如：08 月 08 日 19:30",
-                    value = state.draft.targetSession,
-                    error = state.error(ConfigField.TARGET_SESSION),
-                    onValueChange = { value ->
-                        onDraftChange { it.copy(targetSession = value) }
-                    },
-                )
-                ConfigTextField(
-                    label = "目标票档名称",
-                    placeholder = "例如：看台 580 元",
-                    value = state.draft.targetTier,
-                    error = state.error(ConfigField.TARGET_TIER),
-                    onValueChange = { value ->
-                        onDraftChange { it.copy(targetTier = value) }
-                    },
-                )
-                ConfigTextField(
-                    label = "目标单价（元）",
-                    placeholder = "580",
+                    label = "票档价格（元）",
+                    placeholder = "例如：580",
                     value = state.draft.targetPriceYuan,
                     error = state.error(ConfigField.TARGET_PRICE),
-                    keyboardType = KeyboardType.Decimal,
-                    onValueChange = { value ->
-                        onDraftChange { it.copy(targetPriceYuan = value) }
-                    },
-                )
-                ConfigTextField(
-                    label = "购票数量",
-                    placeholder = "1",
-                    value = state.draft.ticketCount,
-                    error = state.error(ConfigField.TICKET_COUNT),
                     keyboardType = KeyboardType.Number,
                     onValueChange = { value ->
-                        onDraftChange { it.copy(ticketCount = value) }
+                        if (value.all(Char::isDigit)) {
+                            onDraftChange { it.copy(targetPriceYuan = value) }
+                        }
                     },
                 )
-
-                AttendeeConfirmation(
-                    checked = state.draft.attendeesConfigured,
-                    error = state.error(ConfigField.ATTENDEES_CONFIGURED),
-                    onCheckedChange = { checked ->
-                        onDraftChange { it.copy(attendeesConfigured = checked) }
-                    },
+                Text(
+                    text = "只匹配演出日期，不匹配星期、开场时间或“预售”等页面文字。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
             SectionCard(
                 step = "03",
-                title = "设置安全上限",
-                description = "到达任一上限后任务会停止，避免长时间或重复提交。",
-            ) {
-                SafetyLimitFields(
-                    state = state,
-                    onDraftChange = onDraftChange,
-                )
-            }
-
-            SectionCard(
-                step = "04",
                 title = "完成运行授权",
                 description = "两项授权都只用于任务识别、状态展示和停止控制。",
             ) {
@@ -425,6 +389,93 @@ private fun RunModeField(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DatePickerField(
+    value: String,
+    error: String?,
+    onDateSelected: (String) -> Unit,
+) {
+    var showPicker by remember { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedButton(
+            onClick = { showPicker = true },
+            border = BorderStroke(
+                1.dp,
+                if (error == null) {
+                    MaterialTheme.colorScheme.outline
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+            ),
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 64.dp),
+        ) {
+            Column(
+                horizontalAlignment = Alignment.Start,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = "演出日期",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = value.ifBlank { "请选择日期" },
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (value.isBlank()) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                )
+            }
+        }
+        error?.let { ErrorText(it) }
+    }
+
+    if (showPicker) {
+        val initialDateMillis = TicketTaskValidator.parseDate(value)
+            ?.atStartOfDay(ZoneOffset.UTC)
+            ?.toInstant()
+            ?.toEpochMilli()
+        val pickerState = androidx.compose.material3.rememberDatePickerState(
+            initialSelectedDateMillis = initialDateMillis,
+        )
+        DatePickerDialog(
+            onDismissRequest = { showPicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pickerState.selectedDateMillis?.let { selectedMillis ->
+                            onDateSelected(
+                                Instant.ofEpochMilli(selectedMillis)
+                                    .atZone(ZoneOffset.UTC)
+                                    .toLocalDate()
+                                    .toString(),
+                            )
+                        }
+                        showPicker = false
+                    },
+                    enabled = pickerState.selectedDateMillis != null,
+                ) {
+                    Text("确定")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPicker = false }) {
+                    Text("取消")
+                }
+            },
+        ) {
+            DatePicker(state = pickerState)
+        }
+    }
+}
+
 @Composable
 private fun ConfigTextField(
     label: String,
@@ -446,128 +497,6 @@ private fun ConfigTextField(
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         shape = MaterialTheme.shapes.medium,
         modifier = modifier.fillMaxWidth(),
-    )
-}
-
-@Composable
-private fun AttendeeConfirmation(
-    checked: Boolean,
-    error: String?,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Surface(
-            shape = MaterialTheme.shapes.medium,
-            color = if (checked) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant
-            },
-            border = BorderStroke(
-                width = 1.dp,
-                color = if (error != null) {
-                    MaterialTheme.colorScheme.error
-                } else if (checked) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.outlineVariant
-                },
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .toggleable(
-                    value = checked,
-                    onValueChange = onCheckedChange,
-                    role = Role.Checkbox,
-                ),
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
-            ) {
-                Checkbox(
-                    checked = checked,
-                    onCheckedChange = null,
-                )
-                Text(
-                    text = "我已在大麦中配置场次、票档、数量和实名观演人",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-        error?.let { ErrorText(it) }
-    }
-}
-
-@Composable
-private fun SafetyLimitFields(
-    state: ConfigUiState,
-    onDraftChange: ((TicketTaskDraft) -> TicketTaskDraft) -> Unit,
-) {
-    BoxWithConstraints {
-        val compact = maxWidth < 360.dp
-        if (compact) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                MaxAttemptsField(state, onDraftChange)
-                MaxRuntimeField(state, onDraftChange)
-            }
-        } else {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                MaxAttemptsField(
-                    state = state,
-                    onDraftChange = onDraftChange,
-                    modifier = Modifier.weight(1f),
-                )
-                MaxRuntimeField(
-                    state = state,
-                    onDraftChange = onDraftChange,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun MaxAttemptsField(
-    state: ConfigUiState,
-    onDraftChange: ((TicketTaskDraft) -> TicketTaskDraft) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    ConfigTextField(
-        label = "最大提交次数",
-        placeholder = "20",
-        value = state.draft.maxSubmitAttempts,
-        error = state.error(ConfigField.MAX_SUBMIT_ATTEMPTS),
-        keyboardType = KeyboardType.Number,
-        modifier = modifier,
-        onValueChange = { value ->
-            onDraftChange { it.copy(maxSubmitAttempts = value) }
-        },
-    )
-}
-
-@Composable
-private fun MaxRuntimeField(
-    state: ConfigUiState,
-    onDraftChange: ((TicketTaskDraft) -> TicketTaskDraft) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    ConfigTextField(
-        label = "最长运行（分钟）",
-        placeholder = "30",
-        value = state.draft.maxRuntimeMinutes,
-        error = state.error(ConfigField.MAX_RUNTIME),
-        keyboardType = KeyboardType.Number,
-        modifier = modifier,
-        onValueChange = { value ->
-            onDraftChange { it.copy(maxRuntimeMinutes = value) }
-        },
     )
 }
 
@@ -750,7 +679,7 @@ private fun StartActionBar(
                     )
                     Spacer(Modifier.size(10.dp))
                 }
-                Text(if (state.isSaving) "正在保存…" else "保存配置并开始")
+                Text(if (state.isSaving) "正在保存…" else "保存配置并显示悬浮窗")
             }
             Text(
                 text = state.startHint(),
@@ -787,7 +716,7 @@ private fun ConfigUiState.startHint(): String = when {
         is ValidationResult.Invalid ->
             result.issues.firstOrNull()?.message ?: "请检查任务配置"
         is ValidationResult.Valid ->
-            "配置已就绪；开始后请手动打开大麦"
+            "保存后打开大麦，在悬浮窗中点击“开始”"
     }
 }
 
@@ -826,14 +755,8 @@ private fun ReadyConfigScreenPreview() {
             state = ConfigUiState(
                 draft = TicketTaskDraft(
                     runMode = RunMode.SALE_THEN_RETURN,
-                    eventKeyword = "示例项目 上海",
-                    targetSession = "08 月 08 日 19:30",
-                    targetTier = "看台 580 元",
+                    targetDate = "2026-08-08",
                     targetPriceYuan = "580",
-                    ticketCount = "2",
-                    attendeesConfigured = true,
-                    maxSubmitAttempts = "20",
-                    maxRuntimeMinutes = "30",
                 ),
                 accessibilityEnabled = true,
                 notificationPermissionState = NotificationPermissionState.GRANTED,

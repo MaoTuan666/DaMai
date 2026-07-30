@@ -22,7 +22,6 @@ import com.ticketassistant.android.runtime.AutomationPhase
 import com.ticketassistant.android.runtime.EngineRuntimeState
 import java.time.Instant
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,6 +34,7 @@ class DamaiAndroidAdapterTest {
             adapter.detectPage(
                 snapshot(
                     node(EVENT),
+                    node(SESSION),
                     node("抢票攻略"),
                     node("已预约"),
                 ),
@@ -53,6 +53,7 @@ class DamaiAndroidAdapterTest {
     fun `bookable project page proposes book now once`() {
         val sourceSnapshot = snapshot(
             node(EVENT),
+            node(SESSION),
             node("抢票攻略"),
             node("立即预订", clickable = true),
         )
@@ -63,7 +64,6 @@ class DamaiAndroidAdapterTest {
         assertEquals(DamaiPageTypes.BOOKABLE_PROJECT_DETAIL, page.pageType)
         assertTrue(action is ActionDecision.Click)
         assertEquals("DM_CLICK_BOOK_NOW", (action as ActionDecision.Click).eventCode)
-        assertFalse(action.countsAsSubmitAttempt)
 
         val evaluation = PlatformDecisionCoordinator(
             PlatformAdapterRegistry(listOf(adapter)),
@@ -77,7 +77,23 @@ class DamaiAndroidAdapterTest {
     }
 
     @Test
-    fun `seat entry requires fixed session and tier`() {
+    fun `project date match ignores weekday time and sale label`() {
+        val page = recognized(
+            adapter.detectPage(
+                snapshot(
+                    node("2026年8月1日 周六 21:30 预售"),
+                    node("抢票攻略"),
+                    node("立即预订", clickable = true),
+                ),
+                task(),
+            ),
+        )
+
+        assertEquals(DamaiPageTypes.BOOKABLE_PROJECT_DETAIL, page.pageType)
+    }
+
+    @Test
+    fun `seat entry requires fixed date and price`() {
         val page = recognized(
             adapter.detectPage(
                 snapshot(
@@ -96,7 +112,7 @@ class DamaiAndroidAdapterTest {
     }
 
     @Test
-    fun `seat entry reports session mismatch before any action`() {
+    fun `seat entry reports date mismatch before any action`() {
         val result = adapter.detectPage(
             snapshot(
                 node("其他场次"),
@@ -107,11 +123,11 @@ class DamaiAndroidAdapterTest {
         )
 
         assertTrue(result is PageResult.Mismatch)
-        assertEquals(TargetField.SESSION, (result as PageResult.Mismatch).field)
+        assertEquals(TargetField.DATE, (result as PageResult.Mismatch).field)
     }
 
     @Test
-    fun `fully validated confirmation page proposes submit and counts attempt`() {
+    fun `fully validated confirmation page proposes submit`() {
         val page = recognized(adapter.detectPage(orderConfirmationSnapshot(), task()))
 
         val action = adapter.decideAction(page, task(), runtime())
@@ -120,17 +136,15 @@ class DamaiAndroidAdapterTest {
         assertTrue(action is ActionDecision.Click)
         action as ActionDecision.Click
         assertEquals("DM_CLICK_SUBMIT", action.eventCode)
-        assertTrue(action.countsAsSubmitAttempt)
     }
 
     @Test
-    fun `confirmation page rejects mismatched quantity`() {
-        val result = adapter.detectPage(
+    fun `confirmation page ignores quantity text`() {
+        val page = recognized(
+            adapter.detectPage(
             snapshot(
                 node("确认购买"),
-                node(EVENT),
                 node(SESSION),
-                node(TIER),
                 node("￥580"),
                 node("数量：2"),
                 node("实名观演人"),
@@ -138,10 +152,10 @@ class DamaiAndroidAdapterTest {
                 node("立即提交", clickable = true),
             ),
             task(),
+            ),
         )
 
-        assertTrue(result is PageResult.Mismatch)
-        assertEquals(TargetField.QUANTITY, (result as PageResult.Mismatch).field)
+        assertEquals(DamaiPageTypes.ORDER_CONFIRM, page.pageType)
     }
 
     @Test
@@ -149,9 +163,7 @@ class DamaiAndroidAdapterTest {
         val result = adapter.detectPage(
             snapshot(
                 node("确认购买"),
-                node(EVENT),
                 node(SESSION),
-                node(TIER),
                 node("￥680"),
                 node("数量：1"),
                 node("实名观演人"),
@@ -167,13 +179,12 @@ class DamaiAndroidAdapterTest {
     }
 
     @Test
-    fun `confirmation page rejects attendee count mismatch`() {
-        val result = adapter.detectPage(
+    fun `confirmation page ignores attendee count text`() {
+        val page = recognized(
+            adapter.detectPage(
             snapshot(
                 node("确认购买"),
-                node(EVENT),
                 node(SESSION),
-                node(TIER),
                 node("￥580"),
                 node("数量：1"),
                 node("实名观演人"),
@@ -181,10 +192,10 @@ class DamaiAndroidAdapterTest {
                 node("立即提交", clickable = true),
             ),
             task(),
+            ),
         )
 
-        assertTrue(result is PageResult.Mismatch)
-        assertEquals(TargetField.ATTENDEE_COUNT, (result as PageResult.Mismatch).field)
+        assertEquals(DamaiPageTypes.ORDER_CONFIRM, page.pageType)
     }
 
     @Test
@@ -205,7 +216,6 @@ class DamaiAndroidAdapterTest {
         assertTrue(action is ActionDecision.Click)
         action as ActionDecision.Click
         assertEquals("DM_POPUP_CONTINUE", action.eventCode)
-        assertTrue(action.countsAsSubmitAttempt)
     }
 
     @Test
@@ -338,7 +348,7 @@ class DamaiAndroidAdapterTest {
         assertEquals(DamaiPageTypes.RETURN_TIER_SELECTION, page.pageType)
         assertEquals(DamaiEventCodes.TARGET_TIER_AVAILABLE, page.observationEventCode)
         assertEquals("DM_SELECT_TARGET_TIER", action.eventCode)
-        assertEquals(page.evidence.first { it.evidenceCode == "DM_TARGET_TIER" }.node, action.target.node)
+        assertEquals(page.evidence.first { it.evidenceCode == "DM_TARGET_PRICE" }.node, action.target.node)
     }
 
     @Test
@@ -395,6 +405,7 @@ class DamaiAndroidAdapterTest {
             adapter.detectPage(
                 snapshot(
                     node(EVENT),
+                    node(SESSION),
                     node("立即预订", clickable = true),
                 ),
                 configuredTask,
@@ -492,9 +503,7 @@ class DamaiAndroidAdapterTest {
 
     private fun orderConfirmationNodes(): List<TestNode> = listOf(
         node("确认购买"),
-        node(EVENT),
         node(SESSION),
-        node(TIER),
         node("￥580"),
         node("数量：1"),
         node("实名观演人"),
@@ -603,14 +612,9 @@ class DamaiAndroidAdapterTest {
         id = 1,
         platform = TicketPlatform.DAMAI,
         runMode = runMode,
-        eventKeyword = EVENT,
-        targetSession = SESSION,
-        targetTier = TIER,
+        targetDate = DATE,
         targetPriceFen = 58_000,
-        ticketCount = 1,
         adapterConfig = "{}",
-        maxSubmitAttempts = 20,
-        maxRuntimeSeconds = 1_800,
         state = TaskState.WAIT_TARGET_APP,
         createdAt = Instant.EPOCH,
         updatedAt = Instant.EPOCH,
@@ -626,7 +630,8 @@ class DamaiAndroidAdapterTest {
 
     companion object {
         private const val EVENT = "测试演出"
-        private const val SESSION = "周六 19:30"
-        private const val TIER = "看台 580"
+        private const val DATE = "2026-08-01"
+        private const val SESSION = "2026.08.01 周六 19:30"
+        private const val TIER = "看台 580元"
     }
 }

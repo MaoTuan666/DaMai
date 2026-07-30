@@ -97,9 +97,9 @@ class PlatformDecisionCoordinatorTest {
     @Test
     fun `target mismatch pauses a running task`() {
         val mismatch = PageResult.Mismatch(
-            field = TargetField.TIER,
-            expected = "目标票档",
-            actual = "其他票档",
+            field = TargetField.PRICE,
+            expected = "580",
+            actual = "680",
         )
         val adapter = FakeAdapter(mismatch, clickDecision())
 
@@ -313,14 +313,9 @@ class PlatformDecisionCoordinatorTest {
         id = 1,
         platform = TicketPlatform.DAMAI,
         runMode = RunMode.SALE_ONLY,
-        eventKeyword = "测试演出",
-        targetSession = "周六 19:30",
-        targetTier = "看台 580",
+        targetDate = "2026-08-01",
         targetPriceFen = 58_000,
-        ticketCount = 1,
         adapterConfig = "{}",
-        maxSubmitAttempts = 3,
-        maxRuntimeSeconds = 60,
         state = TaskState.WAIT_TARGET_APP,
         createdAt = Instant.EPOCH,
         updatedAt = Instant.EPOCH,

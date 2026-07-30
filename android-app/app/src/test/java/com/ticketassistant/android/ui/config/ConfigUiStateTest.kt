@@ -36,13 +36,7 @@ class ConfigUiStateTest {
 
     private fun validDraft() = TicketTaskDraft(
         runMode = RunMode.SALE_THEN_RETURN,
-        eventKeyword = "测试演出",
-        targetSession = "周六 19:30",
-        targetTier = "看台 580",
+        targetDate = "2026-08-01",
         targetPriceYuan = "580",
-        ticketCount = "2",
-        attendeesConfigured = true,
-        maxSubmitAttempts = "20",
-        maxRuntimeMinutes = "30",
     )
 }

@@ -106,7 +106,7 @@ class ConfigViewModel(
                         mutableUiState.update {
                             it.copy(
                                 isSaving = false,
-                                message = "任务已就绪，请手动打开大麦",
+                                message = "悬浮窗已就绪；请打开大麦后点击悬浮窗中的“开始”",
                                 messageIsError = false,
                                 pendingRunStart = PendingRunStart(
                                     runId = runId,

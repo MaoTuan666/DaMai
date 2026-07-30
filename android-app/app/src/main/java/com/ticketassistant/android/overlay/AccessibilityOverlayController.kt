@@ -50,6 +50,14 @@ class AccessibilityOverlayController(
         pauseResumeButton.setOnClickListener {
             val session = currentSession ?: return@setOnClickListener
             when (currentPrimaryAction) {
+                OverlayPrimaryAction.START -> runCatching {
+                    TaskForegroundService.begin(
+                        service,
+                        session.runId,
+                        session.taskId,
+                    )
+                }
+
                 OverlayPrimaryAction.PAUSE -> runCatching {
                     TaskForegroundService.pause(
                         service,
@@ -116,6 +124,7 @@ class AccessibilityOverlayController(
         pauseResumeButton.text = controls.primaryButtonText
         pauseResumeButton.isEnabled = controls.primaryButtonEnabled
         pauseResumeButton.contentDescription = when (controls.primaryAction) {
+            OverlayPrimaryAction.START -> "开始购票辅助任务"
             OverlayPrimaryAction.PAUSE -> "暂停购票辅助任务"
             OverlayPrimaryAction.RESUME -> "开始购票辅助任务"
             null -> controls.primaryButtonText

@@ -13,37 +13,40 @@ import org.junit.Test
 
 class AutomationEngineTest {
     @Test
-    fun `final allowed submit stops the engine`() = runBlocking {
+    fun `repeated submissions remain running without elapsed time limit`() = runBlocking {
         var now = 0L
         val records = mutableListOf<Record>()
         val engine = engine(
-            maxSubmitAttempts = 1,
             nowMillis = { now },
             records = records,
         )
         engine.initialize()
+        engine.start()
         engine.recognizeTargetPage(1)
-        val scheduled = (
-            engine.requestAction(
-                candidate = ActionCandidate(
-                    actionKey = "SUBMIT",
-                    pageFingerprint = "confirm-page",
-                    countsAsSubmitAttempt = true,
-                ),
-                snapshotSequence = 1,
-            ) as EngineActionDecision.Scheduled
-        ).action
+        now = 86_400_000L
 
-        now = 10
-        engine.completeAction(scheduled, ActionExecutionResult.PERFORMED)
+        repeat(25) { index ->
+            val sequence = index.toLong() + 1
+            if (index > 0) {
+                now += 300
+                engine.observeSnapshot("run-1", sequence)
+            }
+            val scheduled = (
+                engine.requestAction(
+                    candidate = ActionCandidate(
+                        actionKey = "SUBMIT",
+                        pageFingerprint = "confirm-page-$index",
+                    ),
+                    snapshotSequence = sequence,
+                ) as EngineActionDecision.Scheduled
+            ).action
+            now += 10
+            engine.completeAction(scheduled, ActionExecutionResult.PERFORMED)
+        }
 
-        assertEquals(TaskState.STOPPED, engine.state.value.taskState)
-        assertEquals(
-            RuntimeStopReason.MAX_SUBMIT_ATTEMPTS_REACHED,
-            engine.state.value.stopReason,
-        )
-        assertTrue(records.any { it.eventCode == "SUBMIT" && it.detail == "attempt=1" })
-        assertEquals("TASK_STOPPED", records.last().eventCode)
+        assertEquals(TaskState.RUNNING, engine.state.value.taskState)
+        assertEquals(25, records.count { it.eventCode == "SUBMIT" })
+        assertFalse(records.any { it.eventCode == "TASK_STOPPED" })
     }
 
     @Test
@@ -51,6 +54,7 @@ class AutomationEngineTest {
         var now = 0L
         val engine = engine(nowMillis = { now })
         engine.initialize()
+        engine.start()
         engine.recognizeTargetPage(5)
         val scheduled = (
             engine.requestAction(
@@ -82,31 +86,24 @@ class AutomationEngineTest {
     }
 
     private fun engine(
-        maxSubmitAttempts: Int = 3,
         nowMillis: () -> Long,
         records: MutableList<Record> = mutableListOf(),
     ) = AutomationEngine(
         runId = "run-1",
-        task = task(maxSubmitAttempts),
-        startedAtMillis = 0,
+        task = task(),
         nowMillis = nowMillis,
         recorder = RuntimeStateRecorder { state, eventCode, detail ->
             records += Record(state.taskState, eventCode, detail)
         },
     )
 
-    private fun task(maxSubmitAttempts: Int) = TicketTask(
+    private fun task() = TicketTask(
         id = 1,
         platform = TicketPlatform.DAMAI,
         runMode = RunMode.SALE_ONLY,
-        eventKeyword = "测试演出",
-        targetSession = "周六 19:30",
-        targetTier = "看台 580",
+        targetDate = "2026-08-01",
         targetPriceFen = 58_000,
-        ticketCount = 1,
         adapterConfig = "{}",
-        maxSubmitAttempts = maxSubmitAttempts,
-        maxRuntimeSeconds = 60,
         state = TaskState.WAIT_TARGET_APP,
         createdAt = Instant.EPOCH,
         updatedAt = Instant.EPOCH,

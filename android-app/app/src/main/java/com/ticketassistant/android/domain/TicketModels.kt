@@ -17,6 +17,7 @@ enum class RunMode(
 
 enum class TaskState {
     CONFIG,
+    ARMED,
     WAIT_TARGET_APP,
     RUNNING,
     USER_PAUSED,
@@ -29,14 +30,9 @@ data class TicketTask(
     val id: Long,
     val platform: TicketPlatform,
     val runMode: RunMode,
-    val eventKeyword: String,
-    val targetSession: String,
-    val targetTier: String,
+    val targetDate: String,
     val targetPriceFen: Long,
-    val ticketCount: Int,
     val adapterConfig: String,
-    val maxSubmitAttempts: Int,
-    val maxRuntimeSeconds: Long,
     val state: TaskState,
     val createdAt: Instant,
     val updatedAt: Instant,
@@ -45,27 +41,16 @@ data class TicketTask(
 data class TicketTaskDraft(
     val platform: TicketPlatform = TicketPlatform.DAMAI,
     val runMode: RunMode = RunMode.SALE_ONLY,
-    val eventKeyword: String = "",
-    val targetSession: String = "",
-    val targetTier: String = "",
+    val targetDate: String = "",
     val targetPriceYuan: String = "",
-    val ticketCount: String = "1",
-    val attendeesConfigured: Boolean = false,
-    val maxSubmitAttempts: String = "20",
-    val maxRuntimeMinutes: String = "30",
 )
 
 data class ValidatedTicketTask(
     val platform: TicketPlatform,
     val runMode: RunMode,
-    val eventKeyword: String,
-    val targetSession: String,
-    val targetTier: String,
+    val targetDate: String,
     val targetPriceFen: Long,
-    val ticketCount: Int,
     val adapterConfig: String,
-    val maxSubmitAttempts: Int,
-    val maxRuntimeSeconds: Long,
 )
 
 data class ValidationIssue(
@@ -74,14 +59,8 @@ data class ValidationIssue(
 )
 
 enum class ConfigField {
-    EVENT_KEYWORD,
-    TARGET_SESSION,
-    TARGET_TIER,
+    TARGET_DATE,
     TARGET_PRICE,
-    TICKET_COUNT,
-    ATTENDEES_CONFIGURED,
-    MAX_SUBMIT_ATTEMPTS,
-    MAX_RUNTIME,
 }
 
 sealed interface ValidationResult {

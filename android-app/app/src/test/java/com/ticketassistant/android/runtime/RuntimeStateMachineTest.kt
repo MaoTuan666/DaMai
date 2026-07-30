@@ -9,17 +9,39 @@ import org.junit.Test
 
 class RuntimeStateMachineTest {
     @Test
-    fun `return-only task starts in return phase`() {
+    fun `return-only task is armed in return phase`() {
         val state = EngineRuntimeState.initial(RunMode.RETURN_ONLY)
 
-        assertEquals(TaskState.WAIT_TARGET_APP, state.taskState)
+        assertEquals(TaskState.ARMED, state.taskState)
         assertEquals(AutomationPhase.RETURN_MONITOR, state.phase)
+    }
+
+    @Test
+    fun `manual start requires a fresh snapshot before recognition`() {
+        var state = EngineRuntimeState.initial(RunMode.SALE_ONLY)
+        state = applied(state, RuntimeEvent.SnapshotObserved(5))
+        state = applied(state, RuntimeEvent.UserStart)
+
+        assertTrue(
+            RuntimeStateMachine.transition(
+                state,
+                RuntimeEvent.TargetPageRecognized(5),
+            ) is StateTransition.Rejected,
+        )
+
+        state = applied(state, RuntimeEvent.SnapshotObserved(6))
+        state = applied(state, RuntimeEvent.TargetPageRecognized(6))
+        assertEquals(TaskState.RUNNING, state.taskState)
     }
 
     @Test
     fun `resume requires a snapshot newer than the paused page`() {
         var state = applied(
             EngineRuntimeState.initial(RunMode.SALE_ONLY),
+            RuntimeEvent.UserStart,
+        )
+        state = applied(
+            state,
             RuntimeEvent.TargetPageRecognized(10),
         )
         state = applied(state, RuntimeEvent.UserPause)
@@ -38,7 +60,10 @@ class RuntimeStateMachineTest {
     @Test
     fun `safety pause cannot be resumed by user`() {
         val running = applied(
-            EngineRuntimeState.initial(RunMode.SALE_ONLY),
+            applied(
+                EngineRuntimeState.initial(RunMode.SALE_ONLY),
+                RuntimeEvent.UserStart,
+            ),
             RuntimeEvent.TargetPageRecognized(1),
         )
         val paused = applied(
@@ -54,7 +79,10 @@ class RuntimeStateMachineTest {
 
     @Test
     fun `phase switch is accepted only while running`() {
-        val waiting = EngineRuntimeState.initial(RunMode.SALE_THEN_RETURN)
+        val waiting = applied(
+            EngineRuntimeState.initial(RunMode.SALE_THEN_RETURN),
+            RuntimeEvent.UserStart,
+        )
         assertTrue(
             RuntimeStateMachine.transition(
                 waiting,

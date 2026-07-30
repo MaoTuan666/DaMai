@@ -7,6 +7,7 @@ import com.ticketassistant.android.runtime.RuntimeStopReason
 import com.ticketassistant.android.runtime.SafetyPauseReason
 
 enum class OverlayPrimaryAction {
+    START,
     PAUSE,
     RESUME,
 }
@@ -32,6 +33,14 @@ object OverlayPresentation {
     fun controls(state: EngineRuntimeState?): OverlayControlPresentation {
         val phaseText = state?.phase?.displayName() ?: "准备"
         return when (state?.taskState) {
+            TaskState.ARMED -> OverlayControlPresentation(
+                statusText = "请打开大麦后点击开始",
+                phaseText = "准备",
+                primaryButtonText = "开始",
+                primaryButtonEnabled = true,
+                primaryAction = OverlayPrimaryAction.START,
+            )
+
             TaskState.RUNNING -> OverlayControlPresentation(
                 statusText = "运行中",
                 phaseText = phaseText,
@@ -65,9 +74,9 @@ object OverlayPresentation {
             )
 
             TaskState.WAIT_TARGET_APP -> OverlayControlPresentation(
-                statusText = "等待目标应用",
+                statusText = "正在识别当前页面",
                 phaseText = phaseText,
-                primaryButtonText = "等待",
+                primaryButtonText = "识别中",
                 primaryButtonEnabled = false,
                 primaryAction = null,
             )
@@ -96,7 +105,8 @@ object OverlayEventFormatter {
         eventCode: String,
         state: EngineRuntimeState,
     ): String = when (eventCode) {
-        "ENGINE_READY" -> "引擎已就绪，等待目标页面"
+        "ENGINE_ARMED" -> "配置已就绪，请打开大麦后点击开始"
+        "TASK_USER_STARTED" -> "已开始，正在识别当前页面"
         "TARGET_PAGE_RECOGNIZED" -> "已识别目标起始页面"
         "TASK_USER_PAUSED" -> "用户已暂停，待执行动作已取消"
         "TASK_USER_RESUMED" -> "已恢复，等待新的页面快照"
@@ -144,8 +154,6 @@ object OverlayEventFormatter {
 
     private fun RuntimeStopReason?.displayMessage(): String = when (this) {
         RuntimeStopReason.USER_REQUESTED -> "用户已停止任务"
-        RuntimeStopReason.MAX_RUNTIME_REACHED -> "运行时长达到上限"
-        RuntimeStopReason.MAX_SUBMIT_ATTEMPTS_REACHED -> "提交次数达到上限"
         RuntimeStopReason.ACTION_FAILURE_LIMIT_REACHED -> "连续操作失败达到上限"
         RuntimeStopReason.ORDER_LOCKED -> "已到达支付前页面，请手动接管"
         RuntimeStopReason.PLATFORM_REQUESTED -> "平台流程已结束"

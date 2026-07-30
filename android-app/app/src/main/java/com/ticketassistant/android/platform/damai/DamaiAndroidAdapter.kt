@@ -24,6 +24,7 @@ import com.ticketassistant.android.platform.api.WaitReason
 import com.ticketassistant.android.runtime.AutomationPhase
 import com.ticketassistant.android.runtime.EngineRuntimeState
 import java.security.MessageDigest
+import java.time.LocalDate
 import java.util.Locale
 
 object DamaiPageTypes {
@@ -122,7 +123,6 @@ class DamaiAndroidAdapter : PlatformAdapter {
             page = page,
             evidenceCode = EVIDENCE_SUBMIT,
             eventCode = DamaiEventCodes.CLICK_SUBMIT,
-            countsAsSubmitAttempt = true,
         )
 
         DamaiPageTypes.SUBMIT_RESULT_DIALOG -> decideSubmitDialog(page, task, runtime)
@@ -140,7 +140,7 @@ class DamaiAndroidAdapter : PlatformAdapter {
         }
 
         DamaiPageTypes.RETURN_TIER_SELECTION -> returnPhaseDecision(task, runtime) {
-            click(page, EVIDENCE_TARGET_TIER, DamaiEventCodes.SELECT_TARGET_TIER)
+            click(page, EVIDENCE_PRICE, DamaiEventCodes.SELECT_TARGET_TIER)
         }
 
         DamaiPageTypes.RETURN_CONFIRM -> returnPhaseDecision(task, runtime) {
@@ -214,18 +214,10 @@ class DamaiAndroidAdapter : PlatformAdapter {
         val attendeeSection = index.findContaining("实名观演人") ?: return null
         val submit = index.findExact("立即提交") ?: return null
 
-        val event = index.findContaining(task.eventKeyword)
-            ?: return mismatch(TargetField.EVENT, task.eventKeyword)
-        val session = index.findContaining(task.targetSession)
-            ?: return mismatch(TargetField.SESSION, task.targetSession)
-        val tier = index.findContaining(task.targetTier)
-            ?: return mismatch(TargetField.TIER, task.targetTier)
+        val date = index.findDate(task.targetDate)
+            ?: return mismatch(TargetField.DATE, task.targetDate)
         val price = index.findPrice(task.targetPriceFen)
             ?: return mismatch(TargetField.PRICE, task.targetPriceFen.toString())
-        val quantity = index.findQuantity(task.ticketCount)
-            ?: return mismatch(TargetField.QUANTITY, task.ticketCount.toString())
-        val attendeeCount = index.findAttendeeCount(task.ticketCount)
-            ?: return mismatch(TargetField.ATTENDEE_COUNT, task.ticketCount.toString())
         if (!index.isActionable(submit)) {
             return unknown(PageUnknownReason.INSUFFICIENT_EVIDENCE)
         }
@@ -234,13 +226,9 @@ class DamaiAndroidAdapter : PlatformAdapter {
             pageType = DamaiPageTypes.ORDER_CONFIRM,
             evidence = listOf(
                 confirmation.evidence(EVIDENCE_CONFIRM_PURCHASE),
-                event.evidence(EVIDENCE_EVENT),
-                session.evidence(EVIDENCE_SESSION),
-                tier.evidence(EVIDENCE_TARGET_TIER),
+                date.evidence(EVIDENCE_DATE),
                 price.evidence(EVIDENCE_PRICE),
-                quantity.evidence(EVIDENCE_QUANTITY),
                 attendeeSection.evidence(EVIDENCE_ATTENDEE_SECTION),
-                attendeeCount.evidence(EVIDENCE_ATTENDEE_COUNT),
                 submit.evidence(EVIDENCE_SUBMIT),
             ),
         )
@@ -251,18 +239,18 @@ class DamaiAndroidAdapter : PlatformAdapter {
         task: TicketTask,
     ): PageResult? {
         val seatEntry = index.findExact("去选座") ?: return null
-        val session = index.findContaining(task.targetSession)
-            ?: return mismatch(TargetField.SESSION, task.targetSession)
-        val tier = index.findContaining(task.targetTier)
-            ?: return mismatch(TargetField.TIER, task.targetTier)
+        val date = index.findDate(task.targetDate)
+            ?: return mismatch(TargetField.DATE, task.targetDate)
+        val price = index.findPrice(task.targetPriceFen)
+            ?: return mismatch(TargetField.PRICE, task.targetPriceFen.toString())
         if (!index.isActionable(seatEntry)) {
             return unknown(PageUnknownReason.INSUFFICIENT_EVIDENCE)
         }
         return index.recognized(
             pageType = DamaiPageTypes.SEAT_ENTRY,
             evidence = listOf(
-                session.evidence(EVIDENCE_SESSION),
-                tier.evidence(EVIDENCE_TARGET_TIER),
+                date.evidence(EVIDENCE_DATE),
+                price.evidence(EVIDENCE_PRICE),
                 seatEntry.evidence(EVIDENCE_SEAT_ENTRY),
             ),
         )
@@ -276,28 +264,22 @@ class DamaiAndroidAdapter : PlatformAdapter {
         val tierLabel = index.findExact("票档") ?: return null
         val confirm = index.findExact("确定") ?: return null
 
-        val event = index.findContaining(task.eventKeyword)
-            ?: return mismatch(TargetField.EVENT, task.eventKeyword)
-        val session = index.findContaining(task.targetSession)
-            ?: return mismatch(TargetField.SESSION, task.targetSession)
-        val targetTier = index.findContaining(task.targetTier)
-            ?: return mismatch(TargetField.TIER, task.targetTier)
+        val date = index.findDate(task.targetDate)
+            ?: return mismatch(TargetField.DATE, task.targetDate)
         val price = index.findPrice(task.targetPriceFen)
             ?: return mismatch(TargetField.PRICE, task.targetPriceFen.toString())
         val soldOut = index.findExact("缺货登记")
         val commonEvidence = listOf(
-            event.evidence(EVIDENCE_EVENT),
             sessionLabel.evidence(EVIDENCE_SESSION_LABEL),
-            session.evidence(EVIDENCE_SESSION),
+            date.evidence(EVIDENCE_DATE),
             tierLabel.evidence(EVIDENCE_TIER_LABEL),
-            targetTier.evidence(EVIDENCE_TARGET_TIER),
             price.evidence(EVIDENCE_PRICE),
             confirm.evidence(EVIDENCE_CONFIRM),
         )
 
         if (
             soldOut != null &&
-            index.areStructurallyRelated(targetTier, soldOut) &&
+            index.areStructurallyRelated(price, soldOut) &&
             !index.isActionable(confirm)
         ) {
             val back = index.findExact("返回")
@@ -314,10 +296,10 @@ class DamaiAndroidAdapter : PlatformAdapter {
             )
         }
 
-        if (!index.isActionable(targetTier)) {
+        if (!index.isActionable(price)) {
             return unknown(PageUnknownReason.INSUFFICIENT_EVIDENCE)
         }
-        val tierSelected = index.isSelected(targetTier)
+        val tierSelected = index.isSelected(price)
         val confirmActionable = index.isActionable(confirm)
         if (!tierSelected && !confirmActionable) {
             return index.recognized(
@@ -328,11 +310,9 @@ class DamaiAndroidAdapter : PlatformAdapter {
             )
         }
         if (tierSelected && confirmActionable) {
-            val quantity = index.findQuantity(task.ticketCount)
-                ?: return mismatch(TargetField.QUANTITY, task.ticketCount.toString())
             return index.recognized(
                 pageType = DamaiPageTypes.RETURN_CONFIRM,
-                evidence = commonEvidence + quantity.evidence(EVIDENCE_QUANTITY),
+                evidence = commonEvidence,
                 validStartPhases = setOf(AutomationPhase.RETURN_MONITOR),
                 observationEventCode = DamaiEventCodes.TARGET_TIER_AVAILABLE,
             )
@@ -348,8 +328,8 @@ class DamaiAndroidAdapter : PlatformAdapter {
         val bookNow = index.findExact("立即预订")
         if (reserved == null && bookNow == null) return null
 
-        val event = index.findContaining(task.eventKeyword)
-            ?: return mismatch(TargetField.EVENT, task.eventKeyword)
+        val date = index.findDate(task.targetDate)
+            ?: return mismatch(TargetField.DATE, task.targetDate)
         val guide = index.findContaining("抢票攻略")
 
         if (reserved != null) {
@@ -357,7 +337,7 @@ class DamaiAndroidAdapter : PlatformAdapter {
             return index.recognized(
                 pageType = DamaiPageTypes.WAIT_SALE_DETAIL,
                 evidence = listOf(
-                    event.evidence(EVIDENCE_EVENT),
+                    date.evidence(EVIDENCE_DATE),
                     guide.evidence(EVIDENCE_GUIDE),
                     reserved.evidence(EVIDENCE_RESERVED),
                 ),
@@ -376,7 +356,7 @@ class DamaiAndroidAdapter : PlatformAdapter {
                 DamaiPageTypes.BOOKABLE_PROJECT_DETAIL
             },
             evidence = buildList {
-                add(event.evidence(EVIDENCE_EVENT))
+                add(date.evidence(EVIDENCE_DATE))
                 guide?.let { add(it.evidence(EVIDENCE_GUIDE)) }
                 add(actionableBookNow.evidence(EVIDENCE_BOOK_NOW))
             },
@@ -398,7 +378,6 @@ class DamaiAndroidAdapter : PlatformAdapter {
                 page = page,
                 evidenceCode = EVIDENCE_POPUP_CONTINUE,
                 eventCode = DamaiEventCodes.POPUP_CONTINUE,
-                countsAsSubmitAttempt = true,
             )
         }
         if (
@@ -436,7 +415,6 @@ class DamaiAndroidAdapter : PlatformAdapter {
         page: PageResult.Recognized,
         evidenceCode: String,
         eventCode: String,
-        countsAsSubmitAttempt: Boolean = false,
     ): ActionDecision.Click {
         val node = requireNotNull(page.evidenceNode(evidenceCode))
         return ActionDecision.Click(
@@ -448,7 +426,6 @@ class DamaiAndroidAdapter : PlatformAdapter {
                 maximumAncestorDepth = MAX_CLICKABLE_PARENT_DEPTH,
             ),
             eventCode = eventCode,
-            countsAsSubmitAttempt = countsAsSubmitAttempt,
         )
     }
 
@@ -475,16 +452,12 @@ class DamaiAndroidAdapter : PlatformAdapter {
         const val DAMAI_PACKAGE = "cn.damai"
         private const val MAX_CLICKABLE_PARENT_DEPTH = 4
 
-        private const val EVIDENCE_EVENT = "DM_EVENT_KEYWORD"
         private const val EVIDENCE_GUIDE = "DM_GUIDE"
         private const val EVIDENCE_RESERVED = "DM_RESERVED"
         private const val EVIDENCE_BOOK_NOW = "DM_BOOK_NOW"
-        private const val EVIDENCE_SESSION = "DM_TARGET_SESSION"
-        private const val EVIDENCE_TARGET_TIER = "DM_TARGET_TIER"
+        private const val EVIDENCE_DATE = "DM_TARGET_DATE"
         private const val EVIDENCE_PRICE = "DM_TARGET_PRICE"
-        private const val EVIDENCE_QUANTITY = "DM_QUANTITY"
         private const val EVIDENCE_ATTENDEE_SECTION = "DM_ATTENDEE_SECTION"
-        private const val EVIDENCE_ATTENDEE_COUNT = "DM_ATTENDEE_COUNT"
         private const val EVIDENCE_SEAT_ENTRY = "DM_SEAT_ENTRY"
         private const val EVIDENCE_CONFIRM_PURCHASE = "DM_CONFIRM_PURCHASE"
         private const val EVIDENCE_SUBMIT = "DM_SUBMIT"
@@ -513,36 +486,29 @@ private class DamaiSnapshotIndex private constructor(
     }
 
     fun findContaining(value: String): IndexedNode? {
-        val expected = normalize(value)
+        val expected = compact(value)
         if (expected.isEmpty()) return null
-        return nodes.firstOrNull { node -> node.strings.any { expected in it } }
+        return nodes.firstOrNull { node ->
+            node.strings.any { expected in compact(it) }
+        }
     }
 
     fun containsAny(vararg values: String): Boolean =
         values.any { findContaining(it) != null }
 
     fun findPrice(priceFen: Long): IndexedNode? {
-        val whole = priceFen / 100
-        val fraction = priceFen % 100
-        val decimal = if (fraction == 0L) {
-            "$whole(?:\\.00)?"
-        } else {
-            "$whole\\.${fraction.toString().padStart(2, '0')}"
-        }
-        val pattern = Regex("(?:[¥￥]\\s*$decimal|$decimal\\s*元)")
-        return findFirstMatching(pattern)
+        val matches = findAllMatching(pricePattern(priceFen)).toList()
+        return matches.firstOrNull(::isActionable) ?: matches.firstOrNull()
     }
 
-    fun findQuantity(count: Int): IndexedNode? {
+    fun findDate(value: String): IndexedNode? {
+        val date = runCatching { LocalDate.parse(value) }.getOrNull() ?: return null
+        val year = date.year
+        val month = date.monthValue
+        val day = date.dayOfMonth
         val pattern = Regex(
-            "(?:数量\\s*[:：]?\\s*$count(?:\\D|$)|(?:^|\\D)$count\\s*(?:张|份)(?:\\D|$)|[×xX]\\s*$count(?:\\D|$))",
-        )
-        return findFirstMatching(pattern)
-    }
-
-    fun findAttendeeCount(count: Int): IndexedNode? {
-        val pattern = Regex(
-            "(?:(?:已选|共)\\s*$count\\s*(?:人|位)|观演人\\s*[（(]?\\s*$count\\s*[）)]?)",
+            """(?:$year\s*[-./]\s*0?$month\s*[-./]\s*0?$day|""" +
+                """$year\s*年\s*0?$month\s*月\s*0?$day\s*日?)""",
         )
         return findFirstMatching(pattern)
     }
@@ -593,9 +559,23 @@ private class DamaiSnapshotIndex private constructor(
     )
 
     private fun findFirstMatching(pattern: Regex): IndexedNode? =
-        nodes.firstOrNull { node ->
+        findAllMatching(pattern).firstOrNull()
+
+    private fun findAllMatching(pattern: Regex): Sequence<IndexedNode> =
+        nodes.asSequence().filter { node ->
             node.strings.any { pattern.containsMatchIn(it) }
         }
+
+    private fun pricePattern(priceFen: Long): Regex {
+        val whole = priceFen / 100
+        val fraction = priceFen % 100
+        val decimal = if (fraction == 0L) {
+            "$whole(?:\\.00)?"
+        } else {
+            "$whole\\.${fraction.toString().padStart(2, '0')}"
+        }
+        return Regex("(?:[¥￥]\\s*$decimal|$decimal\\s*元)")
+    }
 
     private fun nodeAndAncestors(
         indexedNode: IndexedNode,
@@ -679,6 +659,9 @@ private class DamaiSnapshotIndex private constructor(
 
         private fun normalize(value: String): String =
             value.trim().replace(Regex("\\s+"), " ")
+
+        private fun compact(value: String): String =
+            normalize(value).replace(" ", "")
     }
 }
 

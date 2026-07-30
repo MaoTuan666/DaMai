@@ -11,64 +11,52 @@ class TicketTaskValidatorTest {
 
         assertTrue(result is ValidationResult.Valid)
         val task = (result as ValidationResult.Valid).task
-        assertEquals("周六 19:30", task.targetSession)
-        assertEquals("看台 580", task.targetTier)
+        assertEquals("2026-08-01", task.targetDate)
         assertEquals(58_000L, task.targetPriceFen)
-        assertEquals(2, task.ticketCount)
-        assertEquals(1_800L, task.maxRuntimeSeconds)
     }
 
     @Test
-    fun `price parser converts exact yuan amount to fen`() {
-        assertEquals(58_001L, TicketTaskValidator.parsePriceFen("580.01"))
+    fun `price parser converts whole yuan amount to fen`() {
         assertEquals(58_000L, TicketTaskValidator.parsePriceFen("580"))
     }
 
     @Test
-    fun `price parser rejects fractions smaller than one fen`() {
+    fun `price parser rejects decimal and non-numeric input`() {
+        assertEquals(null, TicketTaskValidator.parsePriceFen("580.01"))
         assertEquals(null, TicketTaskValidator.parsePriceFen("580.001"))
+        assertEquals(null, TicketTaskValidator.parsePriceFen("580元"))
+        assertEquals(null, TicketTaskValidator.parsePriceFen("￥580"))
+        assertEquals(null, TicketTaskValidator.parsePriceFen(" 580 "))
     }
 
     @Test
-    fun `missing target and attendee confirmation are rejected`() {
+    fun `missing date is rejected`() {
         val result = TicketTaskValidator.validate(
             validDraft().copy(
-                targetTier = "",
-                attendeesConfigured = false,
+                targetDate = "",
             ),
         )
 
         assertTrue(result is ValidationResult.Invalid)
         val fields = (result as ValidationResult.Invalid).issues.map { it.field }
-        assertTrue(ConfigField.TARGET_TIER in fields)
-        assertTrue(ConfigField.ATTENDEES_CONFIGURED in fields)
+        assertTrue(ConfigField.TARGET_DATE in fields)
     }
 
     @Test
-    fun `safety limits reject unbounded values`() {
+    fun `invalid calendar date is rejected`() {
         val result = TicketTaskValidator.validate(
-            validDraft().copy(
-                maxSubmitAttempts = "101",
-                maxRuntimeMinutes = "361",
-            ),
+            validDraft().copy(targetDate = "2026-02-30"),
         )
 
         assertTrue(result is ValidationResult.Invalid)
         val fields = (result as ValidationResult.Invalid).issues.map { it.field }
-        assertTrue(ConfigField.MAX_SUBMIT_ATTEMPTS in fields)
-        assertTrue(ConfigField.MAX_RUNTIME in fields)
+        assertTrue(ConfigField.TARGET_DATE in fields)
     }
 
     private fun validDraft() = TicketTaskDraft(
         platform = TicketPlatform.DAMAI,
         runMode = RunMode.SALE_THEN_RETURN,
-        eventKeyword = "测试演出",
-        targetSession = "周六 19:30",
-        targetTier = "看台 580",
+        targetDate = "2026-08-01",
         targetPriceYuan = "580",
-        ticketCount = "2",
-        attendeesConfigured = true,
-        maxSubmitAttempts = "20",
-        maxRuntimeMinutes = "30",
     )
 }

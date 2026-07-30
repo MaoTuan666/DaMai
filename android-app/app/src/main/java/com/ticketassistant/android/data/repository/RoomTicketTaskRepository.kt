@@ -35,15 +35,17 @@ class RoomTicketTaskRepository(
                 TicketTaskEntity(
                     platform = task.platform.name,
                     runMode = task.runMode.name,
-                    eventKeyword = task.eventKeyword,
-                    targetSession = task.targetSession,
-                    targetTier = task.targetTier,
+                    eventKeyword = "",
+                    targetSession = task.targetDate,
+                    targetTier = "",
                     targetPriceFen = task.targetPriceFen,
-                    ticketCount = task.ticketCount,
+                    ticketCount = 1,
                     adapterConfig = task.adapterConfig,
-                    maxSubmitAttempts = task.maxSubmitAttempts,
-                    maxRuntimeSeconds = task.maxRuntimeSeconds,
-                    state = TaskState.WAIT_TARGET_APP.name,
+                    // Keep legacy Room columns populated for schema compatibility.
+                    // Runtime no longer uses submission-count or elapsed-time limits.
+                    maxSubmitAttempts = 0,
+                    maxRuntimeSeconds = 0,
+                    state = TaskState.ARMED.name,
                     createdAt = now,
                     updatedAt = now,
                 ),
@@ -51,9 +53,9 @@ class RoomTicketTaskRepository(
             runLogDao.insert(
                 RunLogEntity(
                     runId = runId,
-                    phase = TaskState.WAIT_TARGET_APP.name,
+                    phase = TaskState.ARMED.name,
                     eventCode = "TASK_ARMED",
-                    sanitizedDetail = "配置已校验，等待用户打开目标应用",
+                    sanitizedDetail = "配置已校验，等待用户在悬浮窗点击开始",
                     createdAt = now,
                 ),
             )

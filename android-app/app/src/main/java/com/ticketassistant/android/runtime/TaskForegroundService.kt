@@ -65,6 +65,7 @@ class TaskForegroundService : Service() {
     ): Int {
         return when (intent?.action) {
             ACTION_START -> startRun(intent, startId)
+            ACTION_BEGIN -> beginRun(intent)
             ACTION_PAUSE -> changePausedState(intent, pause = true)
             ACTION_RESUME -> changePausedState(intent, pause = false)
             ACTION_STOP -> stopRun(intent, startId)
@@ -111,7 +112,7 @@ class TaskForegroundService : Service() {
             taskId = taskId,
             startedAtElapsedRealtimeMillis = startedAtElapsedRealtime,
         )
-        initializeEngine(runId, taskId, startedAtElapsedRealtime)
+        initializeEngine(runId, taskId)
         return START_NOT_STICKY
     }
 
@@ -149,6 +150,33 @@ class TaskForegroundService : Service() {
                     retryCaptureJob = null
                 }
                 if (!pause && transition is StateTransition.Applied) {
+                    AccessibilitySnapshotStore.clear()
+                    SnapshotCaptureRequests.request(runId)
+                }
+            }
+        }
+        return START_NOT_STICKY
+    }
+
+    private fun beginRun(intent: Intent): Int {
+        val runId = intent.getStringExtra(EXTRA_RUN_ID)
+        val taskId = intent.getLongExtra(EXTRA_TASK_ID, INVALID_TASK_ID)
+        val session = ActiveRunStore.session.value
+        if (
+            runId.isNullOrBlank() ||
+            taskId <= 0 ||
+            session?.runId != runId ||
+            session.taskId != taskId ||
+            currentRunId != runId ||
+            isStopping
+        ) {
+            return START_NOT_STICKY
+        }
+
+        serviceScope.launch {
+            runtimeMutex.withLock {
+                val runtimeEngine = engine ?: return@withLock
+                if (runtimeEngine.start() is StateTransition.Applied) {
                     AccessibilitySnapshotStore.clear()
                     SnapshotCaptureRequests.request(runId)
                 }
@@ -203,7 +231,6 @@ class TaskForegroundService : Service() {
     private fun initializeEngine(
         runId: String,
         taskId: Long,
-        startedAtElapsedRealtime: Long,
     ) {
         val ticketApplication = application as TicketAssistantApplication
         val repository = ticketApplication.taskRepository
@@ -222,7 +249,6 @@ class TaskForegroundService : Service() {
                     val runtimeEngine = AutomationEngine(
                         runId = runId,
                         task = task,
-                        startedAtMillis = startedAtElapsedRealtime,
                         nowMillis = SystemClock::elapsedRealtime,
                         recorder = RuntimeStateRecorder { state, eventCode, detail ->
                             repository.updateRuntimeState(
@@ -270,7 +296,6 @@ class TaskForegroundService : Service() {
 
             launchActionResultCollector(runId, components.engine)
             launchSnapshotCollector(runId, components)
-            runRuntimeWatchdog(runId, components.engine)
         }
     }
 
@@ -350,9 +375,15 @@ class TaskForegroundService : Service() {
                 runtime = runtimeEngine.state.value,
             )
             when (evaluation) {
-                is PlatformEvaluation.Ignored,
-                is PlatformEvaluation.AwaitingValidStart,
-                -> return false
+                is PlatformEvaluation.Ignored -> return false
+
+                is PlatformEvaluation.AwaitingValidStart -> {
+                    scheduleSnapshotCapture(
+                        runId = runId,
+                        delayMillis = PAGE_POLL_INTERVAL_MILLIS,
+                    )
+                    return false
+                }
 
                 is PlatformEvaluation.SafetyPause -> {
                     recordPageResultEventOnce(runtimeEngine, evaluation.pageResult)
@@ -399,6 +430,10 @@ class TaskForegroundService : Service() {
                                 eventCode = action.eventCode,
                                 key = evaluation.page.fingerprint.value,
                                 detail = action.reason.name,
+                            )
+                            scheduleSnapshotCapture(
+                                runId = runId,
+                                delayMillis = PAGE_POLL_INTERVAL_MILLIS,
                             )
                             return false
                         }
@@ -461,18 +496,15 @@ class TaskForegroundService : Service() {
     ): Boolean {
         if (pendingAction != null) return false
         val eventCode: String
-        val countsAsSubmitAttempt: Boolean
         val executable: ExecutableActionDecision
         when (action) {
             is ActionDecision.Click -> {
                 eventCode = action.eventCode
-                countsAsSubmitAttempt = action.countsAsSubmitAttempt
                 executable = ExecutableActionDecision.Click(action)
             }
 
             is ActionDecision.GlobalBack -> {
                 eventCode = action.eventCode
-                countsAsSubmitAttempt = false
                 executable = ExecutableActionDecision.GlobalBack(action)
             }
 
@@ -484,7 +516,6 @@ class TaskForegroundService : Service() {
                 candidate = ActionCandidate(
                     actionKey = eventCode,
                     pageFingerprint = page.fingerprint.value,
-                    countsAsSubmitAttempt = countsAsSubmitAttempt,
                 ),
                 snapshotSequence = snapshot.captureSequence,
             )
@@ -580,9 +611,13 @@ class TaskForegroundService : Service() {
         retryCaptureJob?.cancel()
         retryCaptureJob = serviceScope.launch {
             if (delayMillis > 0) delay(delayMillis)
+            val taskState = engine?.state?.value?.taskState
             if (
                 ActiveRunStore.isActive(runId) &&
-                engine?.state?.value?.taskState == TaskState.RUNNING
+                (
+                    taskState == TaskState.WAIT_TARGET_APP ||
+                        taskState == TaskState.RUNNING
+                    )
             ) {
                 SnapshotCaptureRequests.request(runId)
             }
@@ -611,33 +646,6 @@ class TaskForegroundService : Service() {
                         scheduleSnapshotCapture(runId, 0)
                     }
                 }
-            }
-        }
-    }
-
-    private suspend fun runRuntimeWatchdog(
-        runId: String,
-        runtimeEngine: AutomationEngine,
-    ) {
-        while (ActiveRunStore.isActive(runId)) {
-            delay(RUNTIME_WATCHDOG_INTERVAL_MILLIS)
-            val stopReason = try {
-                runtimeMutex.withLock {
-                    runtimeEngine.checkRuntimeLimit()
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                lifecycleMutex.withLock {
-                    finishRun(runId)
-                }
-                return
-            }
-            if (stopReason != null) {
-                lifecycleMutex.withLock {
-                    finishRun(runId)
-                }
-                return
             }
         }
     }
@@ -774,6 +782,8 @@ class TaskForegroundService : Service() {
     companion object {
         private const val ACTION_START =
             "com.ticketassistant.android.runtime.action.START"
+        private const val ACTION_BEGIN =
+            "com.ticketassistant.android.runtime.action.BEGIN"
         private const val ACTION_PAUSE =
             "com.ticketassistant.android.runtime.action.PAUSE"
         private const val ACTION_RESUME =
@@ -787,8 +797,8 @@ class TaskForegroundService : Service() {
         private const val OPEN_APP_REQUEST_CODE = 1_002
         private const val STOP_REQUEST_CODE = 1_003
         private const val INVALID_TASK_ID = -1L
-        private const val RUNTIME_WATCHDOG_INTERVAL_MILLIS = 1_000L
         private const val SNAPSHOT_AFTER_ACTION_MILLIS = 220L
+        private const val PAGE_POLL_INTERVAL_MILLIS = 300L
         private const val ACTION_RESULT_TIMEOUT_MILLIS = 1_800L
         private const val TAKEOVER_VIBRATION_MILLIS = 350L
         private const val MAX_DECISION_STEPS_PER_SNAPSHOT = 4
@@ -814,6 +824,14 @@ class TaskForegroundService : Service() {
             taskId: Long,
         ) {
             context.startService(createControlIntent(context, ACTION_PAUSE, runId, taskId))
+        }
+
+        fun begin(
+            context: Context,
+            runId: String,
+            taskId: Long,
+        ) {
+            context.startService(createControlIntent(context, ACTION_BEGIN, runId, taskId))
         }
 
         fun resume(

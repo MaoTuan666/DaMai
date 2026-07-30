@@ -22,7 +22,7 @@ class RuntimeOverlayStoreTest {
             RuntimeOverlayStore.record(
                 runId = "run-current",
                 state = runningState,
-                eventCode = if (index == 5) "TASK_USER_PAUSED" else "ENGINE_READY",
+                eventCode = if (index == 5) "TASK_USER_PAUSED" else "ENGINE_ARMED",
                 occurredAtEpochMillis = index.toLong(),
                 sanitizedDetail = if (index == 5) "attempt=3" else "",
             )
@@ -42,7 +42,7 @@ class RuntimeOverlayStoreTest {
         RuntimeOverlayStore.record(
             runId = "run-stale",
             state = runningState,
-            eventCode = "ENGINE_READY",
+            eventCode = "ENGINE_ARMED",
         )
         RuntimeOverlayStore.end("run-stale")
 
