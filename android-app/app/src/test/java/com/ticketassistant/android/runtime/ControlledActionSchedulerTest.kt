@@ -103,6 +103,21 @@ class ControlledActionSchedulerTest {
         )
     }
 
+    @Test
+    fun `cancelled submission releases in flight action for retry`() {
+        val scheduler = scheduler()
+        val first = ready(scheduler.request(candidate, 0))
+
+        assertEquals(
+            ActionCompletion.Recorded,
+            scheduler.complete(first, ActionExecutionResult.CANCELLED, 10),
+        )
+
+        val retry = ready(scheduler.request(candidate, 10))
+        assertEquals(first.actionId + 1, retry.actionId)
+        assertEquals(1, retry.attemptNumber)
+    }
+
     private fun scheduler(maxAttempts: Int = 3) = ControlledActionScheduler(
         runId = "run-1",
         policy = ActionPolicy(

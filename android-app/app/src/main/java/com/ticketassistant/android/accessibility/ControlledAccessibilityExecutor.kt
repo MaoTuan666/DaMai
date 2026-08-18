@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.graphics.Rect
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import com.ticketassistant.android.overlay.OverlayBoundsStore
 import com.ticketassistant.android.platform.api.ClickResolution
 import com.ticketassistant.android.platform.api.NodeReference
@@ -13,14 +14,17 @@ import com.ticketassistant.android.runtime.AccessibilityActionResult
 import com.ticketassistant.android.runtime.ActionExecutionResult
 import com.ticketassistant.android.runtime.ActiveRunStore
 import com.ticketassistant.android.runtime.ExecutableActionDecision
+import kotlinx.coroutines.CancellationException
 
 class ControlledAccessibilityExecutor(
     private val service: AccessibilityService,
 ) {
     fun execute(command: AccessibilityActionCommand) {
-        val result = preflight(command) ?: when (val decision = command.decision) {
-            is ExecutableActionDecision.Click -> executeClick(command, decision)
-            is ExecutableActionDecision.GlobalBack -> executeGlobalBack(command, decision)
+        val result = ControlledExecutionBoundary.run {
+            preflight(command) ?: when (val decision = command.decision) {
+                is ExecutableActionDecision.Click -> executeClick(command, decision)
+                is ExecutableActionDecision.GlobalBack -> executeGlobalBack(command, decision)
+            }
         }
         AccessibilityActionBus.complete(
             AccessibilityActionResult(
@@ -42,14 +46,40 @@ class ControlledAccessibilityExecutor(
         )?.let { return it }
         requireNotNull(snapshot)
 
-        val activePackage = service.rootInActiveWindow?.packageName?.toString()
-        if (activePackage != snapshot.packageName) {
+        val supportedWindow = SupportedAppWindowSelector.select(
+            activePackageName = service.rootInActiveWindow?.packageName?.toString(),
+            windows = service.windows
+                .asSequence()
+                .map { window ->
+                    WindowPackage(
+                        id = window.id,
+                        layer = window.layer,
+                        category = window.selectorCategory(),
+                        packageName = window.root?.packageName?.toString(),
+                    )
+                }
+                .toList(),
+            supportedPackages = TicketAccessibilityService.SUPPORTED_PACKAGES,
+            assistantPackageName = service.packageName,
+        )
+        if (
+            supportedWindow?.packageName != snapshot.packageName ||
+            supportedWindow.id != command.page.windowId
+        ) {
             return ActionExecutionResult.TARGET_INVALID
         }
         if (!validateLivePageEvidence(snapshot, command)) {
             return ActionExecutionResult.TARGET_INVALID
         }
         return null
+    }
+
+    private fun AccessibilityWindowInfo.selectorCategory(): WindowCategory = when (type) {
+        AccessibilityWindowInfo.TYPE_APPLICATION -> WindowCategory.APPLICATION
+        AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY ->
+            WindowCategory.ACCESSIBILITY_OVERLAY
+
+        else -> WindowCategory.OTHER
     }
 
     private fun executeClick(
@@ -141,7 +171,7 @@ class ControlledAccessibilityExecutor(
     private fun UiSnapshot.findNode(reference: NodeReference): UiNodeSnapshot? {
         val root = windows.firstOrNull { it.id == reference.windowId }?.root ?: return null
         return reference.path.fold(root as UiNodeSnapshot?) { node, childIndex ->
-            node?.children?.getOrNull(childIndex)
+            node?.childAtSourceIndex(childIndex)
         }
     }
 
@@ -182,5 +212,15 @@ class ControlledAccessibilityExecutor(
 
     companion object {
         private const val MAX_COMMAND_AGE_MILLIS = 1_500L
+    }
+}
+
+internal object ControlledExecutionBoundary {
+    fun run(block: () -> ActionExecutionResult): ActionExecutionResult = try {
+        block()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        ActionExecutionResult.TARGET_INVALID
     }
 }

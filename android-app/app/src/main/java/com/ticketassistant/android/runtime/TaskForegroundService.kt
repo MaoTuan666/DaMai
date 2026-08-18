@@ -19,6 +19,7 @@ import com.ticketassistant.android.R
 import com.ticketassistant.android.TicketAssistantApplication
 import com.ticketassistant.android.accessibility.AccessibilitySnapshotStore
 import com.ticketassistant.android.accessibility.SnapshotCaptureRequests
+import com.ticketassistant.android.accessibility.SnapshotSequenceStore
 import com.ticketassistant.android.accessibility.UiSnapshot
 import com.ticketassistant.android.domain.TaskState
 import com.ticketassistant.android.domain.TicketTask
@@ -51,7 +52,10 @@ class TaskForegroundService : Service() {
     private var actionTimeoutJob: Job? = null
     private var retryCaptureJob: Job? = null
     private val recordedObservationKeys = linkedSetOf<String>()
+    private val awaitingValidStartLogLimiter = AwaitingValidStartLogLimiter()
     private var isStopping = false
+    @Volatile
+    private var terminalStopRequested = false
 
     override fun onCreate() {
         super.onCreate()
@@ -63,11 +67,15 @@ class TaskForegroundService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
+        if (terminalStopRequested) {
+            stopSelfResult(startId)
+            return START_NOT_STICKY
+        }
         return when (intent?.action) {
             ACTION_START -> startRun(intent, startId)
-            ACTION_BEGIN -> beginRun(intent)
-            ACTION_PAUSE -> changePausedState(intent, pause = true)
-            ACTION_RESUME -> changePausedState(intent, pause = false)
+            ACTION_BEGIN -> beginRun(intent, startId)
+            ACTION_PAUSE -> changePausedState(intent, startId, pause = true)
+            ACTION_RESUME -> changePausedState(intent, startId, pause = false)
             ACTION_STOP -> stopRun(intent, startId)
             else -> {
                 stopSelfResult(startId)
@@ -82,6 +90,7 @@ class TaskForegroundService : Service() {
         currentRunId?.let {
             ActiveRunStore.disarm(it)
             RuntimeOverlayStore.end(it)
+            SnapshotSequenceStore.clear(it)
         }
         AccessibilitySnapshotStore.clear()
         serviceScope.cancel()
@@ -106,6 +115,7 @@ class TaskForegroundService : Service() {
         promoteToForeground(buildNotification(runId, taskId))
         currentRunId = runId
         val startedAtElapsedRealtime = SystemClock.elapsedRealtime()
+        awaitingValidStartLogLimiter.reset()
         RuntimeOverlayStore.begin(runId)
         ActiveRunStore.arm(
             runId = runId,
@@ -118,6 +128,7 @@ class TaskForegroundService : Service() {
 
     private fun changePausedState(
         intent: Intent,
+        startId: Int,
         pause: Boolean,
     ): Int {
         val runId = intent.getStringExtra(EXTRA_RUN_ID)
@@ -131,6 +142,9 @@ class TaskForegroundService : Service() {
             currentRunId != runId ||
             isStopping
         ) {
+            if (currentRunId == null) {
+                stopSelfResult(startId)
+            }
             return START_NOT_STICKY
         }
 
@@ -151,14 +165,14 @@ class TaskForegroundService : Service() {
                 }
                 if (!pause && transition is StateTransition.Applied) {
                     AccessibilitySnapshotStore.clear()
-                    SnapshotCaptureRequests.request(runId)
+                    scheduleSnapshotCapture(runId, delayMillis = 0)
                 }
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun beginRun(intent: Intent): Int {
+    private fun beginRun(intent: Intent, startId: Int): Int {
         val runId = intent.getStringExtra(EXTRA_RUN_ID)
         val taskId = intent.getLongExtra(EXTRA_TASK_ID, INVALID_TASK_ID)
         val session = ActiveRunStore.session.value
@@ -170,6 +184,9 @@ class TaskForegroundService : Service() {
             currentRunId != runId ||
             isStopping
         ) {
+            if (currentRunId == null) {
+                stopSelfResult(startId)
+            }
             return START_NOT_STICKY
         }
 
@@ -178,7 +195,7 @@ class TaskForegroundService : Service() {
                 val runtimeEngine = engine ?: return@withLock
                 if (runtimeEngine.start() is StateTransition.Applied) {
                     AccessibilitySnapshotStore.clear()
-                    SnapshotCaptureRequests.request(runId)
+                    scheduleSnapshotCapture(runId, delayMillis = 0)
                 }
             }
         }
@@ -221,7 +238,7 @@ class TaskForegroundService : Service() {
                 }
             } finally {
                 lifecycleMutex.withLock {
-                    finishRun(runId, startId)
+                    finishRun(runId)
                 }
             }
         }
@@ -251,16 +268,16 @@ class TaskForegroundService : Service() {
                         task = task,
                         nowMillis = SystemClock::elapsedRealtime,
                         recorder = RuntimeStateRecorder { state, eventCode, detail ->
+                            RuntimeOverlayStore.record(
+                                runId = runId,
+                                state = state,
+                                eventCode = eventCode,
+                                sanitizedDetail = detail,
+                            )
                             repository.updateRuntimeState(
                                 taskId = taskId,
                                 runId = runId,
                                 state = state.taskState,
-                                eventCode = eventCode,
-                                sanitizedDetail = detail,
-                            )
-                            RuntimeOverlayStore.record(
-                                runId = runId,
-                                state = state,
                                 eventCode = eventCode,
                                 sanitizedDetail = detail,
                             )
@@ -362,6 +379,16 @@ class TaskForegroundService : Service() {
     ): Boolean {
         if (snapshot.runId != runId) return false
         val runtimeEngine = components.engine
+        if (
+            SnapshotProbePolicy.arrivalDisposition(
+                captureSequence = snapshot.captureSequence,
+                lastObservedSequence = runtimeEngine.state.value.lastSnapshotSequence,
+            ) == SnapshotArrivalDisposition.IGNORE_AND_KEEP_PROBE
+        ) {
+            return continueWithSnapshotProbe(runId)
+        }
+        retryCaptureJob?.cancel()
+        retryCaptureJob = null
         runtimeEngine.observeSnapshot(
             snapshotRunId = snapshot.runId,
             sequence = snapshot.captureSequence,
@@ -375,9 +402,19 @@ class TaskForegroundService : Service() {
                 runtime = runtimeEngine.state.value,
             )
             when (evaluation) {
-                is PlatformEvaluation.Ignored -> return false
+                is PlatformEvaluation.Ignored -> {
+                    scheduleSnapshotCapture(
+                        runId = runId,
+                        delayMillis = PAGE_POLL_INTERVAL_MILLIS,
+                    )
+                    return false
+                }
 
                 is PlatformEvaluation.AwaitingValidStart -> {
+                    recordAwaitingValidStart(
+                        runtimeEngine = runtimeEngine,
+                        pageResult = evaluation.pageResult,
+                    )
                     scheduleSnapshotCapture(
                         runId = runId,
                         delayMillis = PAGE_POLL_INTERVAL_MILLIS,
@@ -397,7 +434,20 @@ class TaskForegroundService : Service() {
                 }
 
                 is PlatformEvaluation.ContractRejected -> {
-                    val pauseReason = evaluation.safetyPauseReason ?: return false
+                    val pauseReason = evaluation.safetyPauseReason
+                    if (pauseReason == null) {
+                        recordAwaitingValidStart(
+                            runtimeEngine = runtimeEngine,
+                            event = AwaitingValidStartLogEvent.contractRejected(
+                                evaluation.violation,
+                            ),
+                        )
+                        scheduleSnapshotCapture(
+                            runId = runId,
+                            delayMillis = PAGE_POLL_INTERVAL_MILLIS,
+                        )
+                        return false
+                    }
                     pendingAction = null
                     actionTimeoutJob?.cancel()
                     actionTimeoutJob = null
@@ -419,7 +469,9 @@ class TaskForegroundService : Service() {
                         val transition = runtimeEngine.recognizeTargetPage(
                             snapshot.captureSequence,
                         )
-                        if (transition !is StateTransition.Applied) return false
+                        if (transition !is StateTransition.Applied) {
+                            return continueWithSnapshotProbe(runId)
+                        }
                         return@repeat
                     }
 
@@ -446,7 +498,9 @@ class TaskForegroundService : Service() {
                                 detail = action.phase.name,
                             )
                             val transition = runtimeEngine.switchPhase(action.phase)
-                            if (transition !is StateTransition.Applied) return false
+                            if (transition !is StateTransition.Applied) {
+                                return continueWithSnapshotProbe(runId)
+                            }
                             return@repeat
                         }
 
@@ -494,7 +548,7 @@ class TaskForegroundService : Service() {
         action: ActionDecision,
         runtimeEngine: AutomationEngine,
     ): Boolean {
-        if (pendingAction != null) return false
+        if (pendingAction != null) return continueWithSnapshotProbe(runId)
         val eventCode: String
         val executable: ExecutableActionDecision
         when (action) {
@@ -508,7 +562,7 @@ class TaskForegroundService : Service() {
                 executable = ExecutableActionDecision.GlobalBack(action)
             }
 
-            else -> return false
+            else -> return continueWithSnapshotProbe(runId)
         }
 
         return when (
@@ -536,8 +590,9 @@ class TaskForegroundService : Service() {
                     pendingAction = null
                     runtimeEngine.completeAction(
                         decision.action,
-                        ActionExecutionResult.TARGET_INVALID,
+                        ActionExecutionResult.CANCELLED,
                     )
+                    return continueWithSnapshotProbe(runId)
                 } else {
                     scheduleActionTimeout(runId, decision.action, runtimeEngine)
                 }
@@ -545,15 +600,19 @@ class TaskForegroundService : Service() {
             }
 
             is EngineActionDecision.Waiting -> {
-                decision.retryAfterMillis?.let {
-                    scheduleSnapshotCapture(runId, it)
-                }
-                false
+                continueWithSnapshotProbe(
+                    runId = runId,
+                    delayMillis = SnapshotProbePolicy.retryDelayMillis(
+                        requestedDelayMillis = decision.retryAfterMillis,
+                        defaultDelayMillis = PAGE_POLL_INTERVAL_MILLIS,
+                    ),
+                )
             }
 
-            is EngineActionDecision.Paused,
-            EngineActionDecision.StateDoesNotAllowAction,
-            -> false
+            is EngineActionDecision.Paused -> false
+
+            EngineActionDecision.StateDoesNotAllowAction ->
+                continueWithSnapshotProbe(runId)
 
             is EngineActionDecision.Stopped -> true
         }
@@ -589,6 +648,34 @@ class TaskForegroundService : Service() {
         }
     }
 
+    private suspend fun recordAwaitingValidStart(
+        runtimeEngine: AutomationEngine,
+        pageResult: PageResult,
+    ) = recordAwaitingValidStart(
+        runtimeEngine = runtimeEngine,
+        event = AwaitingValidStartLogEvent.from(
+            pageResult = pageResult,
+            phase = runtimeEngine.state.value.phase,
+        ),
+    )
+
+    private suspend fun recordAwaitingValidStart(
+        runtimeEngine: AutomationEngine,
+        event: AwaitingValidStartLogEvent,
+    ) {
+        if (
+            awaitingValidStartLogLimiter.shouldRecord(
+                event = event,
+                nowElapsedRealtimeMillis = SystemClock.elapsedRealtime(),
+            )
+        ) {
+            runtimeEngine.recordAdapterEvent(
+                eventCode = event.eventCode,
+                sanitizedDetail = event.sanitizedDetail,
+            )
+        }
+    }
+
     private suspend fun recordObservationOnce(
         runtimeEngine: AutomationEngine,
         eventCode: String?,
@@ -611,17 +698,55 @@ class TaskForegroundService : Service() {
         retryCaptureJob?.cancel()
         retryCaptureJob = serviceScope.launch {
             if (delayMillis > 0) delay(delayMillis)
-            val taskState = engine?.state?.value?.taskState
-            if (
-                ActiveRunStore.isActive(runId) &&
-                (
-                    taskState == TaskState.WAIT_TARGET_APP ||
-                        taskState == TaskState.RUNNING
-                    )
-            ) {
+            val probeStartedAtMillis = SystemClock.elapsedRealtime()
+            var unavailableLogged = false
+            while (true) {
+                val taskState = engine?.state?.value?.taskState
+                if (
+                    !ActiveRunStore.isActive(runId) ||
+                    (
+                        taskState != TaskState.WAIT_TARGET_APP &&
+                            taskState != TaskState.RUNNING
+                        )
+                ) {
+                    return@launch
+                }
                 SnapshotCaptureRequests.request(runId)
+
+                if (
+                    !unavailableLogged &&
+                    taskState == TaskState.WAIT_TARGET_APP &&
+                    SystemClock.elapsedRealtime() - probeStartedAtMillis >=
+                    SNAPSHOT_UNAVAILABLE_LOG_DELAY_MILLIS
+                ) {
+                    runtimeMutex.withLock {
+                        val runtimeEngine = engine
+                        if (
+                            runtimeEngine != null &&
+                            ActiveRunStore.isActive(runId) &&
+                            runtimeEngine.state.value.taskState == TaskState.WAIT_TARGET_APP
+                        ) {
+                            recordAwaitingValidStart(
+                                runtimeEngine = runtimeEngine,
+                                event = AwaitingValidStartLogEvent.snapshotUnavailable(),
+                            )
+                        }
+                    }
+                    unavailableLogged = true
+                }
+                delay(PAGE_POLL_INTERVAL_MILLIS)
             }
         }
+    }
+
+    private fun continueWithSnapshotProbe(
+        runId: String,
+        delayMillis: Long = PAGE_POLL_INTERVAL_MILLIS,
+    ): Boolean {
+        if (retryCaptureJob?.isActive != true) {
+            scheduleSnapshotCapture(runId, delayMillis)
+        }
+        return false
     }
 
     private fun scheduleActionTimeout(
@@ -666,25 +791,21 @@ class TaskForegroundService : Service() {
         }
     }
 
-    private fun finishRun(
-        runId: String,
-        startId: Int? = null,
-    ) {
+    private fun finishRun(runId: String) {
         pendingAction = null
         actionTimeoutJob?.cancel()
         actionTimeoutJob = null
         retryCaptureJob?.cancel()
         retryCaptureJob = null
         recordedObservationKeys.clear()
+        awaitingValidStartLogLimiter.reset()
         ActiveRunStore.disarm(runId)
         RuntimeOverlayStore.end(runId)
         AccessibilitySnapshotStore.clear()
+        SnapshotSequenceStore.clear(runId)
         stopForeground(STOP_FOREGROUND_REMOVE)
-        if (startId == null) {
-            stopSelf()
-        } else {
-            stopSelfResult(startId)
-        }
+        terminalStopRequested = true
+        stopSelf()
     }
 
     private fun createNotificationChannel() {
@@ -799,6 +920,7 @@ class TaskForegroundService : Service() {
         private const val INVALID_TASK_ID = -1L
         private const val SNAPSHOT_AFTER_ACTION_MILLIS = 220L
         private const val PAGE_POLL_INTERVAL_MILLIS = 300L
+        private const val SNAPSHOT_UNAVAILABLE_LOG_DELAY_MILLIS = 3_000L
         private const val ACTION_RESULT_TIMEOUT_MILLIS = 1_800L
         private const val TAKEOVER_VIBRATION_MILLIS = 350L
         private const val MAX_DECISION_STEPS_PER_SNAPSHOT = 4

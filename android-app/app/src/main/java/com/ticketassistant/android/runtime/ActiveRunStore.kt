@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * start a new run, which prevents stale task state from observing or acting on another session.
  */
 object ActiveRunStore {
+    private val lock = Any()
     private val mutableSession = MutableStateFlow<ActiveRunSession?>(null)
     val session: StateFlow<ActiveRunSession?> = mutableSession.asStateFlow()
 
@@ -22,32 +23,50 @@ object ActiveRunStore {
     ) {
         require(runId.isNotBlank())
         require(taskId > 0)
-        mutableSession.value = ActiveRunSession(
-            runId = runId,
-            taskId = taskId,
-            startedAtEpochMillis = startedAtEpochMillis,
-            startedAtElapsedRealtimeMillis = startedAtElapsedRealtimeMillis,
-            runtimeState = null,
-        )
+        synchronized(lock) {
+            mutableSession.value = ActiveRunSession(
+                runId = runId,
+                taskId = taskId,
+                startedAtEpochMillis = startedAtEpochMillis,
+                startedAtElapsedRealtimeMillis = startedAtElapsedRealtimeMillis,
+                runtimeState = null,
+            )
+        }
     }
 
-    fun isActive(runId: String): Boolean = mutableSession.value?.runId == runId
+    fun isActive(runId: String): Boolean = synchronized(lock) {
+        mutableSession.value?.runId == runId
+    }
 
     fun updateRuntimeState(
         runId: String,
         state: EngineRuntimeState,
     ) {
-        val current = mutableSession.value ?: return
-        if (current.runId == runId) {
-            mutableSession.value = current.copy(runtimeState = state)
+        synchronized(lock) {
+            val current = mutableSession.value ?: return
+            if (current.runId == runId) {
+                mutableSession.value = current.copy(runtimeState = state)
+            }
         }
     }
 
     fun disarm(expectedRunId: String? = null) {
-        val current = mutableSession.value ?: return
-        if (expectedRunId == null || current.runId == expectedRunId) {
-            mutableSession.value = null
+        synchronized(lock) {
+            val current = mutableSession.value ?: return
+            if (expectedRunId == null || current.runId == expectedRunId) {
+                mutableSession.value = null
+            }
         }
+    }
+
+    fun <T> withActiveRun(
+        runId: String,
+        block: (ActiveRunSession) -> T,
+    ): T? = synchronized(lock) {
+        val current = mutableSession.value
+            ?.takeIf { it.runId == runId }
+            ?: return@synchronized null
+        block(current)
     }
 }
 

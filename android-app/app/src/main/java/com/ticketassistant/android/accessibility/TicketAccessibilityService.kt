@@ -28,7 +28,6 @@ class TicketAccessibilityService : AccessibilityService() {
     private var pendingCapture: Job? = null
     private var burstStartedAtMillis: Long? = null
     private var pendingRunId: String? = null
-    private var captureSequence = 0L
     private var captureRequestJob: Job? = null
     private var actionExecutionJob: Job? = null
     private var overlayController: AccessibilityOverlayController? = null
@@ -41,7 +40,7 @@ class TicketAccessibilityService : AccessibilityService() {
                 it.start(serviceScope)
             }
         }
-        if (captureRequestJob == null) {
+        if (captureRequestJob?.isActive != true) {
             captureRequestJob = serviceScope.launch {
                 SnapshotCaptureRequests.requests.collect(::captureRequestedSnapshot)
             }
@@ -49,7 +48,7 @@ class TicketAccessibilityService : AccessibilityService() {
         if (controlledExecutor == null) {
             controlledExecutor = ControlledAccessibilityExecutor(this)
         }
-        if (actionExecutionJob == null) {
+        if (actionExecutionJob?.isActive != true) {
             actionExecutionJob = serviceScope.launch {
                 AccessibilityActionBus.commands.collect { command ->
                     controlledExecutor?.execute(command)
@@ -63,7 +62,7 @@ class TicketAccessibilityService : AccessibilityService() {
         val packageName = event?.packageName?.toString() ?: return
         if (packageName !in SUPPORTED_PACKAGES) return
 
-        scheduleStableSnapshot(runId, packageName)
+        scheduleStableSnapshot(runId)
     }
 
     override fun onInterrupt() {
@@ -92,15 +91,10 @@ class TicketAccessibilityService : AccessibilityService() {
 
     private fun captureRequestedSnapshot(runId: String) {
         if (!ActiveRunStore.isActive(runId)) return
-        val packageName = rootInActiveWindow?.packageName?.toString() ?: return
-        if (packageName !in SUPPORTED_PACKAGES) return
-        scheduleStableSnapshot(runId, packageName)
+        scheduleStableSnapshot(runId)
     }
 
-    private fun scheduleStableSnapshot(
-        runId: String,
-        packageName: String,
-    ) {
+    private fun scheduleStableSnapshot(runId: String) {
         if (pendingRunId != runId) {
             cancelPendingCapture()
             pendingRunId = runId
@@ -121,29 +115,55 @@ class TicketAccessibilityService : AccessibilityService() {
                 resetPendingCapture()
                 return@launch
             }
-            captureSnapshot(runId, packageName)
+            captureSnapshot(runId)
             resetPendingCapture()
         }
     }
 
-    private fun captureSnapshot(
-        runId: String,
-        packageName: String,
-    ) {
-        captureSequence += 1
-        val snapshot = UiSnapshot(
-            runId = runId,
-            captureSequence = captureSequence,
-            packageName = packageName,
-            capturedAtEpochMillis = System.currentTimeMillis(),
-            windows = windows
+    private fun captureSnapshot(runId: String) {
+        val liveWindows = windows.toList()
+        val supportedWindow = SupportedAppWindowSelector.select(
+            activePackageName = rootInActiveWindow?.packageName?.toString(),
+            windows = liveWindows
                 .asSequence()
-                .filterNot { it.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY }
-                .sortedByDescending(AccessibilityWindowInfo::getLayer)
-                .map(::snapshotWindow)
+                .map { window ->
+                    WindowPackage(
+                        id = window.id,
+                        layer = window.layer,
+                        category = window.selectorCategory(),
+                        packageName = window.root?.packageName?.toString(),
+                    )
+                }
                 .toList(),
-        )
-        AccessibilitySnapshotStore.update(snapshot)
+            supportedPackages = SUPPORTED_PACKAGES,
+            assistantPackageName = packageName,
+        ) ?: return
+
+        val snapshotWindows = liveWindows
+            .asSequence()
+            .filterNot { it.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY }
+            .sortedByDescending(AccessibilityWindowInfo::getLayer)
+            .map(::snapshotWindow)
+            .toList()
+        ActiveRunStore.withActiveRun(runId) {
+            AccessibilitySnapshotStore.update(
+                UiSnapshot(
+                    runId = runId,
+                    captureSequence = SnapshotSequenceStore.next(runId),
+                    packageName = supportedWindow.packageName,
+                    capturedAtEpochMillis = System.currentTimeMillis(),
+                    windows = snapshotWindows,
+                ),
+            )
+        }
+    }
+
+    private fun AccessibilityWindowInfo.selectorCategory(): WindowCategory = when (type) {
+        AccessibilityWindowInfo.TYPE_APPLICATION -> WindowCategory.APPLICATION
+        AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY ->
+            WindowCategory.ACCESSIBILITY_OVERLAY
+
+        else -> WindowCategory.OTHER
     }
 
     private fun cancelPendingCapture() {

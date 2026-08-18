@@ -43,7 +43,7 @@ class AutomationEngine(
     val state: StateFlow<EngineRuntimeState> = mutableState.asStateFlow()
 
     suspend fun initialize() = mutex.withLock {
-        recorder.record(
+        recordBestEffort(
             state = mutableState.value,
             eventCode = "ENGINE_ARMED",
             sanitizedDetail = "配置已就绪，等待用户在悬浮窗点击开始",
@@ -74,13 +74,9 @@ class AutomationEngine(
     suspend fun recordAdapterEvent(
         eventCode: String,
         sanitizedDetail: String,
-    ) = mutex.withLock {
-        if (mutableState.value.taskState == TaskState.STOPPED) return@withLock
-        recorder.record(
-            state = mutableState.value,
-            eventCode = eventCode,
-            sanitizedDetail = sanitizedDetail,
-        )
+    ): Boolean = mutex.withLock {
+        if (mutableState.value.taskState == TaskState.STOPPED) return@withLock false
+        recordBestEffort(mutableState.value, eventCode, sanitizedDetail)
     }
 
     suspend fun recognizeTargetPage(sequence: Long): StateTransition =
@@ -191,13 +187,13 @@ class AutomationEngine(
         if (completion is ActionCompletion.IgnoredStaleAction) return@withLock completion
 
         when (result) {
-            ActionExecutionResult.PERFORMED -> recorder.record(
+            ActionExecutionResult.PERFORMED -> recordBestEffort(
                 state = mutableState.value,
                 eventCode = action.candidate.actionKey,
                 sanitizedDetail = "attempt=${action.attemptNumber}",
             )
 
-            ActionExecutionResult.FAILED -> recorder.record(
+            ActionExecutionResult.FAILED -> recordBestEffort(
                 state = mutableState.value,
                 eventCode = "ACTION_FAILED",
                 sanitizedDetail = "attempt=${action.attemptNumber}",
@@ -255,9 +251,17 @@ class AutomationEngine(
         if (transition is StateTransition.Applied) {
             mutableState.value = transition.state
             onStateChanged(transition.state)
-            recorder.record(transition.state, eventCode, detail)
+            recordBestEffort(transition.state, eventCode, detail)
         }
         return transition
+    }
+
+    private suspend fun recordBestEffort(
+        state: EngineRuntimeState,
+        eventCode: String,
+        sanitizedDetail: String,
+    ): Boolean = BestEffortRuntimeRecorder.record {
+        recorder.record(state, eventCode, sanitizedDetail)
     }
 
     private fun applyWithoutRecording(event: RuntimeEvent) {

@@ -1,11 +1,20 @@
 package com.ticketassistant.android
 
+import android.app.ActivityManager
 import android.content.Intent
+import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import com.ticketassistant.android.domain.RunMode
+import com.ticketassistant.android.domain.TicketPlatform
+import com.ticketassistant.android.domain.ValidatedTicketTask
+import com.ticketassistant.android.runtime.ActiveRunStore
+import com.ticketassistant.android.runtime.TaskForegroundService
+import java.util.UUID
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -58,6 +67,59 @@ class MainActivitySmokeTest {
         assertEquals(TARGET_PACKAGE, device.currentPackageName)
     }
 
+    @Test
+    fun foregroundService_duplicateStop_allowsNextRun() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val application = context.applicationContext as TicketAssistantApplication
+        val firstRunId = "android-test-${UUID.randomUUID()}"
+        val firstTaskId = application.taskRepository.createArmedTask(testTask(), firstRunId)
+
+        try {
+            TaskForegroundService.start(context, firstRunId, firstTaskId)
+            assertTrue(
+                "首个任务未启动",
+                waitUntil { ActiveRunStore.isActive(firstRunId) },
+            )
+
+            repeat(4) {
+                TaskForegroundService.stop(context, firstRunId, firstTaskId)
+                TaskForegroundService.pause(context, firstRunId, firstTaskId)
+                TaskForegroundService.begin(context, firstRunId, firstTaskId)
+                TaskForegroundService.resume(context, firstRunId, firstTaskId)
+            }
+            assertTrue(
+                "重复停止和迟到控制请求后前台服务仍残留",
+                waitUntil { !isRuntimeServiceRunning(context) },
+            )
+
+            TaskForegroundService.pause(context, firstRunId, firstTaskId)
+            TaskForegroundService.begin(context, firstRunId, firstTaskId)
+            TaskForegroundService.resume(context, firstRunId, firstTaskId)
+            assertTrue(
+                "迟到控制请求重建了空服务",
+                waitUntil { !isRuntimeServiceRunning(context) },
+            )
+
+            val secondRunId = "android-test-${UUID.randomUUID()}"
+            val secondTaskId = application.taskRepository.createArmedTask(testTask(), secondRunId)
+            TaskForegroundService.start(context, secondRunId, secondTaskId)
+            assertTrue(
+                "残留服务阻止了下一次任务",
+                waitUntil { ActiveRunStore.isActive(secondRunId) },
+            )
+            TaskForegroundService.stop(context, secondRunId, secondTaskId)
+            assertTrue(
+                "第二个任务停止后前台服务仍残留",
+                waitUntil { !isRuntimeServiceRunning(context) },
+            )
+        } finally {
+            TaskForegroundService.stop(context, firstRunId, firstTaskId)
+            ActiveRunStore.session.value?.let { session ->
+                TaskForegroundService.stop(context, session.runId, session.taskId)
+            }
+        }
+    }
+
     private fun scrollUntilText(text: String): Boolean {
         repeat(MAX_SCROLL_ATTEMPTS) {
             if (device.hasObject(By.text(text))) return true
@@ -73,9 +135,36 @@ class MainActivitySmokeTest {
         return device.wait(Until.hasObject(By.text(text)), SCREEN_TIMEOUT_MS)
     }
 
+    private fun waitUntil(condition: () -> Boolean): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + SERVICE_TIMEOUT_MS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (condition()) return true
+            SystemClock.sleep(SERVICE_POLL_INTERVAL_MS)
+        }
+        return condition()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isRuntimeServiceRunning(context: android.content.Context): Boolean {
+        val manager = context.getSystemService(ActivityManager::class.java)
+        return manager.getRunningServices(Int.MAX_VALUE).any { service ->
+            service.service.className == TaskForegroundService::class.java.name
+        }
+    }
+
+    private fun testTask() = ValidatedTicketTask(
+        platform = TicketPlatform.DAMAI,
+        runMode = RunMode.SALE_ONLY,
+        targetDate = "2026-08-17",
+        targetPriceFen = 58_000L,
+        adapterConfig = "{}",
+    )
+
     private companion object {
         const val TARGET_PACKAGE = "com.ticketassistant.android"
         const val SCREEN_TIMEOUT_MS = 5_000L
         const val MAX_SCROLL_ATTEMPTS = 8
+        const val SERVICE_TIMEOUT_MS = 5_000L
+        const val SERVICE_POLL_INTERVAL_MS = 50L
     }
 }

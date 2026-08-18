@@ -85,6 +85,40 @@ class AutomationEngineTest {
         )
     }
 
+    @Test
+    fun `adapter diagnostic failure does not escape into runtime collector`() = runBlocking {
+        val engine = AutomationEngine(
+            runId = "run-1",
+            task = task(),
+            nowMillis = { 0L },
+            recorder = RuntimeStateRecorder { _, eventCode, _ ->
+                if (eventCode == "DIAGNOSTIC") error("database unavailable")
+            },
+        )
+        engine.initialize()
+
+        assertFalse(engine.recordAdapterEvent("DIAGNOSTIC", "reason=TEST"))
+        assertTrue(engine.recordAdapterEvent("DIAGNOSTIC_RECOVERED", "reason=TEST"))
+    }
+
+    @Test
+    fun `core state persistence failure does not stop runtime progress`() = runBlocking {
+        val engine = AutomationEngine(
+            runId = "run-1",
+            task = task(),
+            nowMillis = { 0L },
+            recorder = RuntimeStateRecorder { _, _, _ ->
+                error("database unavailable")
+            },
+        )
+
+        engine.initialize()
+        assertTrue(engine.start() is StateTransition.Applied)
+        engine.observeSnapshot("run-1", 1)
+        assertTrue(engine.recognizeTargetPage(1) is StateTransition.Applied)
+        assertEquals(TaskState.RUNNING, engine.state.value.taskState)
+    }
+
     private fun engine(
         nowMillis: () -> Long,
         records: MutableList<Record> = mutableListOf(),

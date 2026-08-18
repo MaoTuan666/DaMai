@@ -77,11 +77,158 @@ class DamaiAndroidAdapterTest {
     }
 
     @Test
-    fun `project date match ignores weekday time and sale label`() {
+    fun `project date accepts full date and month day formats with surrounding labels`() {
+        listOf(
+            "2026年8月1日 周六 21:30 预售",
+            "2026-08-01 周六 21:30 预售",
+            "2026/08/01 周六 21:30 预售",
+            "2026.08.01 周六 21:30 预售",
+            "2026 年  8 月  1 日 周六 21:30 预售",
+            "2026 -  08 -  01 周六 21:30 预售",
+            "8月1日 周六 21:30 预售",
+            "08-01 周六 21:30 预售",
+            "08/01 周六 21:30 预售",
+            "08.01 周六 21:30 预售",
+        ).forEach { displayedDate ->
+            val page = recognized(
+                adapter.detectPage(
+                    snapshot(
+                        node(displayedDate),
+                        node("抢票攻略"),
+                        node("立即预订", clickable = true),
+                    ),
+                    task(),
+                ),
+            )
+
+            assertEquals(DamaiPageTypes.BOOKABLE_PROJECT_DETAIL, page.pageType)
+        }
+    }
+
+    @Test
+    fun `project date does not match inside longer numbers or a different year`() {
+        listOf(
+            "12026年8月1日",
+            "2026年8月10日",
+            "108月1日",
+            "8月10日",
+            "12026-08-01",
+            "2026-08-010",
+            "108-01",
+            "08-010",
+            "2027-08-01",
+            "2027年8月1日",
+            "2027 -   08 - 01",
+            "2027年   8月1日",
+            "12026年  8月1日",
+        ).forEach { displayedDate ->
+            val result = adapter.detectPage(
+                snapshot(
+                    node(displayedDate),
+                    node("抢票攻略"),
+                    node("立即预订", clickable = true),
+                ),
+                task(),
+            )
+
+            assertTrue(
+                "Expected date mismatch for $displayedDate but was $result",
+                result is PageResult.Mismatch,
+            )
+            assertEquals(TargetField.DATE, (result as PageResult.Mismatch).field)
+        }
+    }
+
+    @Test
+    fun `project date rejects decimal-like and unpadded numeric month day values`() {
+        listOf(
+            "评分8.1",
+            "版本8.1.0",
+            "￥8.01",
+            "8.01元",
+            "8-1",
+            "8/1",
+            "8.1",
+        ).forEach { displayedDate ->
+            val result = adapter.detectPage(
+                snapshot(
+                    node(displayedDate),
+                    node("抢票攻略"),
+                    node("立即预订", clickable = true),
+                ),
+                task(),
+            )
+
+            assertTrue(
+                "Expected date mismatch for $displayedDate but was $result",
+                result is PageResult.Mismatch,
+            )
+            assertEquals(TargetField.DATE, (result as PageResult.Mismatch).field)
+        }
+    }
+
+    @Test
+    fun `month day fallback accepts matching year split across nodes`() {
+        listOf(
+            listOf(node("2026年"), node("8月1日 周六 21:30")),
+            listOf(node("2026"), node("08-01 周六 21:30")),
+        ).forEach { dateNodes ->
+            val page = recognized(
+                adapter.detectPage(
+                    snapshot(
+                        *dateNodes.toTypedArray(),
+                        node("抢票攻略"),
+                        node("立即预订", clickable = true),
+                    ),
+                    task(),
+                ),
+            )
+
+            assertEquals(DamaiPageTypes.BOOKABLE_PROJECT_DETAIL, page.pageType)
+        }
+    }
+
+    @Test
+    fun `month day fallback rejects conflicting year in another visible node`() {
+        listOf(
+            listOf(node("2027年"), node("8月1日 周六 21:30")),
+            listOf(node("2027"), node("08-01 周六 21:30")),
+            listOf(node("2027-08-01"), node("8月1日 周六 21:30")),
+            listOf(node("2027/08/01"), node("08-01 周六 21:30")),
+            listOf(node("2027.08.01"), node("8月1日 周六 21:30")),
+            listOf(
+                node(
+                    "2027年8月1日",
+                    children = listOf(node("8月1日 周六 21:30")),
+                ),
+            ),
+        ).forEach { dateNodes ->
+            val result = adapter.detectPage(
+                snapshot(
+                    *dateNodes.toTypedArray(),
+                    node("抢票攻略"),
+                    node("立即预订", clickable = true),
+                ),
+                task(),
+            )
+
+            assertTrue(
+                "Expected date mismatch for split year nodes but was $result",
+                result is PageResult.Mismatch,
+            )
+            assertEquals(TargetField.DATE, (result as PageResult.Mismatch).field)
+        }
+    }
+
+    @Test
+    fun `month day fallback ignores unrelated year outside the date structure`() {
         val page = recognized(
             adapter.detectPage(
                 snapshot(
-                    node("2026年8月1日 周六 21:30 预售"),
+                    node("2025年"),
+                    node("巡演介绍"),
+                    node("场馆须知"),
+                    node("8月1日 周六 21:30"),
                     node("抢票攻略"),
                     node("立即预订", clickable = true),
                 ),

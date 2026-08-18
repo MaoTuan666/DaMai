@@ -26,6 +26,7 @@ import com.ticketassistant.android.runtime.EngineRuntimeState
 import java.security.MessageDigest
 import java.time.LocalDate
 import java.util.Locale
+import kotlin.math.abs
 
 object DamaiPageTypes {
     val WAIT_SALE_DETAIL = PlatformPageType("DM_WAIT_SALE_DETAIL")
@@ -506,11 +507,22 @@ private class DamaiSnapshotIndex private constructor(
         val year = date.year
         val month = date.monthValue
         val day = date.dayOfMonth
-        val pattern = Regex(
-            """(?:$year\s*[-./]\s*0?$month\s*[-./]\s*0?$day|""" +
-                """$year\s*年\s*0?$month\s*月\s*0?$day\s*日?)""",
+        val paddedMonth = month.toString().padStart(2, '0')
+        val paddedDay = day.toString().padStart(2, '0')
+        val fullDatePattern = Regex(
+            """(?:""" +
+                """(?<![\d./-])$year\s*[-./]\s*0?$month\s*[-./]\s*0?$day(?![\d./-])|""" +
+                """(?<!\d)$year\s*年\s*0?$month\s*月\s*0?$day""" +
+                """(?:\s*日(?!\d)|(?![\d日])))""",
         )
-        return findFirstMatching(pattern)
+        val monthDayPattern = Regex(
+            """(?:""" +
+                """(?<!\d)$paddedMonth\s*[-./]\s*$paddedDay(?![\d./-])|""" +
+                """(?<!\d)0?$month\s*月\s*0?$day""" +
+                """(?:\s*日(?!\d)|(?![\d日])))""",
+        )
+        return findFirstMatching(fullDatePattern)
+            ?: findStandaloneMonthDay(monthDayPattern, expectedYear = year)
     }
 
     fun isActionable(node: IndexedNode): Boolean =
@@ -560,6 +572,63 @@ private class DamaiSnapshotIndex private constructor(
 
     private fun findFirstMatching(pattern: Regex): IndexedNode? =
         findAllMatching(pattern).firstOrNull()
+
+    private fun findStandaloneMonthDay(
+        pattern: Regex,
+        expectedYear: Int,
+    ): IndexedNode? = nodes.firstOrNull { node ->
+        node.strings.any { value ->
+            pattern.findAll(value).any { match ->
+                val prefix = value.substring(0, match.range.first)
+                !YEAR_PREFIX_PATTERN.containsMatchIn(prefix) &&
+                    !containsConflictingRelatedYear(node, expectedYear)
+            }
+        }
+    }
+
+    private fun containsConflictingRelatedYear(
+        dateNode: IndexedNode,
+        expectedYear: Int,
+    ): Boolean = nodes
+        .asSequence()
+        .filter { candidate -> areDateFragmentsRelated(dateNode, candidate) }
+        .any { node ->
+            node.strings.any { value ->
+                DATE_YEAR_PATTERNS.any { pattern ->
+                    pattern.findAll(value).any { match ->
+                        match.groupValues[1]
+                            .toIntOrNull()
+                            ?.let { it != expectedYear } == true
+                    }
+                }
+            }
+        }
+
+    private fun areDateFragmentsRelated(
+        first: IndexedNode,
+        second: IndexedNode,
+    ): Boolean {
+        if (first.reference.windowId != second.reference.windowId) return false
+        val firstPath = first.reference.path
+        val secondPath = second.reference.path
+        if (firstPath == secondPath) return true
+        if (
+            firstPath.size < secondPath.size &&
+            secondPath.take(firstPath.size) == firstPath
+        ) {
+            return true
+        }
+        if (
+            secondPath.size < firstPath.size &&
+            firstPath.take(secondPath.size) == secondPath
+        ) {
+            return true
+        }
+        return firstPath.isNotEmpty() &&
+            firstPath.size == secondPath.size &&
+            firstPath.dropLast(1) == secondPath.dropLast(1) &&
+            abs(firstPath.last() - secondPath.last()) <= MAX_DATE_FRAGMENT_SIBLING_GAP
+    }
 
     private fun findAllMatching(pattern: Regex): Sequence<IndexedNode> =
         nodes.asSequence().filter { node ->
@@ -621,6 +690,16 @@ private class DamaiSnapshotIndex private constructor(
         private const val MAX_LOOKUP_ANCESTOR_DEPTH = 4
         private const val MAX_SELECTION_ANCESTOR_DEPTH = 3
         private const val MAX_RELATED_NODE_DISTANCE = 2
+        private const val MAX_DATE_FRAGMENT_SIBLING_GAP = 2
+        private val YEAR_PREFIX_PATTERN = Regex("""\d+\s*(?:年|[-./])\s*$""")
+        private val DATE_YEAR_PATTERNS = listOf(
+            Regex("""(?<!\d)(\d{4})\s*年\s*\d{1,2}\s*月\s*\d{1,2}(?:\s*日)?(?!\d)"""),
+            Regex(
+                """(?<![\d./-])(\d{4})\s*[-./]\s*\d{1,2}\s*[-./]\s*""" +
+                    """\d{1,2}(?![\d./-])""",
+            ),
+            Regex("""^(\d{4})\s*年?$"""),
+        )
 
         operator fun invoke(snapshot: UiSnapshot): DamaiSnapshotIndex? {
             val platformWindows = snapshot.windows

@@ -38,7 +38,7 @@ object RuntimeOverlayStore {
             occurredAtEpochMillis = occurredAtEpochMillis,
             phase = state.phase,
             eventCode = eventCode,
-            message = OverlayEventFormatter.message(eventCode, state),
+            message = OverlayEventFormatter.message(eventCode, state, sanitizedDetail),
             attemptNumber = parseAttemptNumber(sanitizedDetail),
         )
         mutableLogs.value = current.copy(

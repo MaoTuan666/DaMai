@@ -41,6 +41,13 @@ data class UiNodeSnapshot(
     val children: List<UiNodeSnapshot>,
 )
 
+internal fun UiNodeSnapshot.childAtSourceIndex(index: Int): UiNodeSnapshot? =
+    children.firstOrNull { child ->
+        child.path.size == path.size + 1 &&
+            child.path.dropLast(1) == path &&
+            child.path.lastOrNull() == index
+    }
+
 enum class UiCheckedState {
     NOT_CHECKABLE,
     UNCHECKED,

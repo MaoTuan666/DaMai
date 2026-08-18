@@ -2,9 +2,12 @@ package com.ticketassistant.android.overlay
 
 import com.ticketassistant.android.domain.TaskState
 import com.ticketassistant.android.runtime.AutomationPhase
+import com.ticketassistant.android.runtime.AwaitingValidStartEventCodes
 import com.ticketassistant.android.runtime.EngineRuntimeState
 import com.ticketassistant.android.runtime.RuntimeStopReason
 import com.ticketassistant.android.runtime.SafetyPauseReason
+import com.ticketassistant.android.platform.api.PageUnknownReason
+import com.ticketassistant.android.platform.api.TargetField
 
 enum class OverlayPrimaryAction {
     START,
@@ -104,10 +107,19 @@ object OverlayEventFormatter {
     fun message(
         eventCode: String,
         state: EngineRuntimeState,
+        sanitizedDetail: String = "",
     ): String = when (eventCode) {
         "ENGINE_ARMED" -> "配置已就绪，请打开大麦后点击开始"
         "TASK_USER_STARTED" -> "已开始，正在识别当前页面"
         "TARGET_PAGE_RECOGNIZED" -> "已识别目标起始页面"
+        AwaitingValidStartEventCodes.UNKNOWN -> unknownStartMessage(sanitizedDetail)
+        AwaitingValidStartEventCodes.MISMATCH -> mismatchStartMessage(sanitizedDetail)
+        AwaitingValidStartEventCodes.INVALID_PHASE ->
+            "已识别页面，但不是${state.phase.displayName()}阶段的起始页"
+        AwaitingValidStartEventCodes.SNAPSHOT_UNAVAILABLE ->
+            "未读取到大麦页面，请确认大麦在前台"
+        AwaitingValidStartEventCodes.CONTRACT_REJECTED ->
+            "起始页校验未通过，正在重新识别"
         "TASK_USER_PAUSED" -> "用户已暂停，待执行动作已取消"
         "TASK_USER_RESUMED" -> "已恢复，等待新的页面快照"
         "TASK_SAFETY_PAUSED" -> state.safetyPauseReason.displayMessage()
@@ -116,6 +128,38 @@ object OverlayEventFormatter {
         "TASK_STOPPED" -> state.stopReason.displayMessage()
         "ACTION_FAILED" -> "操作未成功，等待受控重试"
         else -> actionMessage(eventCode) ?: "运行状态已更新"
+    }
+
+    private fun unknownStartMessage(sanitizedDetail: String): String =
+        when (enumDetail(sanitizedDetail, "reason", PageUnknownReason::valueOf)) {
+            PageUnknownReason.INSUFFICIENT_EVIDENCE -> "起始页未识别：页面特征不足"
+            PageUnknownReason.UNKNOWN_TOP_WINDOW -> "起始页未识别：前台页面未知"
+            PageUnknownReason.LOGIN_REQUIRED -> "起始页未识别：需要登录"
+            PageUnknownReason.VERIFICATION_REQUIRED -> "起始页未识别：需要人工验证"
+            PageUnknownReason.RISK_CONTROL_REQUIRED -> "起始页未识别：触发风险验证"
+            PageUnknownReason.DEVICE_CHECK_REQUIRED -> "起始页未识别：需要设备验证"
+            PageUnknownReason.PERMISSION_REQUIRED -> "起始页未识别：需要授权"
+            null -> "尚未识别目标起始页面"
+        }
+
+    private fun mismatchStartMessage(sanitizedDetail: String): String =
+        when (enumDetail(sanitizedDetail, "field", TargetField::valueOf)) {
+            TargetField.PLATFORM -> "目标不一致：平台"
+            TargetField.DATE -> "目标不一致：日期"
+            TargetField.PRICE -> "目标不一致：票价"
+            null -> "当前页面与任务目标不一致"
+        }
+
+    private fun <T> enumDetail(
+        sanitizedDetail: String,
+        field: String,
+        parse: (String) -> T,
+    ): T? {
+        val prefix = "$field="
+        if (!sanitizedDetail.startsWith(prefix)) return null
+        val value = sanitizedDetail.removePrefix(prefix)
+        if (!value.matches(SAFE_ENUM_VALUE)) return null
+        return runCatching { parse(value) }.getOrNull()
     }
 
     private fun actionMessage(eventCode: String): String? = when (eventCode) {
@@ -159,6 +203,8 @@ object OverlayEventFormatter {
         RuntimeStopReason.PLATFORM_REQUESTED -> "平台流程已结束"
         null -> "任务已停止"
     }
+
+    private val SAFE_ENUM_VALUE = Regex("[A-Z][A-Z0-9_]*")
 }
 
 private fun AutomationPhase.displayName(): String = when (this) {

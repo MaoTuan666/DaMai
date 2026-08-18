@@ -3,6 +3,7 @@ package com.ticketassistant.android.platform.api
 import com.ticketassistant.android.accessibility.UiNodeSnapshot
 import com.ticketassistant.android.accessibility.UiSnapshot
 import com.ticketassistant.android.accessibility.UiWindowSnapshot
+import com.ticketassistant.android.accessibility.childAtSourceIndex
 import com.ticketassistant.android.domain.TaskState
 import com.ticketassistant.android.domain.TicketTask
 import com.ticketassistant.android.runtime.EngineRuntimeState
@@ -285,7 +286,7 @@ class PlatformDecisionCoordinator(
     private fun UiSnapshot.findNode(reference: NodeReference): UiNodeSnapshot? {
         val root = windows.firstOrNull { it.id == reference.windowId }?.root ?: return null
         return reference.path.fold(root as UiNodeSnapshot?) { node, childIndex ->
-            node?.children?.getOrNull(childIndex)
+            node?.childAtSourceIndex(childIndex)
         }
     }
 
